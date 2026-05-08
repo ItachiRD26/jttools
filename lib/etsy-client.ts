@@ -1,0 +1,310 @@
+// ─────────────────────────────────────────────
+//  JT Tools — Etsy v3 Client
+//  Maps internal endpoint slugs → Etsy API URLs
+// ─────────────────────────────────────────────
+
+const ETSY_BASE = "https://openapi.etsy.com/v3";
+const API_KEY = process.env.ETSY_API_KEY!;
+// Each user passes their own shop_id per request — no server default needed
+function requireShopId(id: string | undefined): string {
+  if (!id) throw new Error("Missing required parameter: shop_id. Pass your Etsy shop ID in the query string.");
+  return id;
+}
+
+// ─── Route Map ──────────────────────────────
+// Maps "endpoint/slug" → function that builds the Etsy URL + params
+
+type RouteHandler = (params: Record<string, string>, body?: unknown) => {
+  method: string;
+  url: string;
+  body?: unknown;
+};
+
+const ROUTE_MAP: Record<string, RouteHandler> = {
+  // ── Listings ──────────────────────────────
+  "listings/search": ({ query, limit = "25", offset = "0", ...rest }) => ({
+    method: "GET",
+    url: buildUrl(`${ETSY_BASE}/application/listings/active`, {
+      keywords: query,
+      limit,
+      offset,
+      ...rest,
+    }),
+  }),
+
+  "listings/get": ({ listing_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/listings/${listing_id}`,
+  }),
+
+  "listings/active": ({ shop_id, limit = "25", offset = "0" }) => ({
+    method: "GET",
+    url: buildUrl(`${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/active`, {
+      limit,
+      offset,
+    }),
+  }),
+
+  "listings/featured": ({ shop_id }) => ({
+    method: "GET",
+    url: buildUrl(`${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/featured`, {}),
+  }),
+
+  "listings/create": ({ shop_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings`,
+    body,
+  }),
+
+  "listings/update": ({ listing_id }, body) => ({
+    method: "PATCH",
+    url: `${ETSY_BASE}/application/listings/${listing_id}`,
+    body,
+  }),
+
+  "listings/delete": ({ listing_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/listings/${listing_id}`,
+  }),
+
+  "listings/images": ({ listing_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/listings/${listing_id}/images`,
+  }),
+
+  "listings/inventory": ({ listing_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/listings/${listing_id}/inventory`,
+  }),
+
+  "listings/properties": ({ listing_id, shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/properties`,
+  }),
+
+  "listings/shipping": ({ listing_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/listings/${listing_id}/shipping`,
+  }),
+
+  // ── Search ────────────────────────────────
+  "search/listings": ({ query, limit = "25", offset = "0", ...rest }) => ({
+    method: "GET",
+    url: buildUrl(`${ETSY_BASE}/application/listings/active`, {
+      keywords: query,
+      limit,
+      offset,
+      ...rest,
+    }),
+  }),
+
+  // ── Shops ─────────────────────────────────
+  "shops/get": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}`,
+  }),
+
+  "shops/listings": ({ shop_id, limit = "25", offset = "0" }) => ({
+    method: "GET",
+    url: buildUrl(`${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings`, {
+      limit,
+      offset,
+    }),
+  }),
+
+  "shops/sections": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/sections`,
+  }),
+
+  "shops/reviews": ({ shop_id, limit = "25", offset = "0" }) => ({
+    method: "GET",
+    url: buildUrl(`${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/reviews`, {
+      limit,
+      offset,
+    }),
+  }),
+
+  "shops/transactions": ({ shop_id, limit = "25", offset = "0" }) => ({
+    method: "GET",
+    url: buildUrl(`${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/transactions`, {
+      limit,
+      offset,
+    }),
+  }),
+
+  "shops/orders": ({ shop_id, limit = "25", offset = "0" }) => ({
+    method: "GET",
+    url: buildUrl(
+      `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/receipts`,
+      { limit, offset }
+    ),
+  }),
+
+  "shops/update": ({ shop_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}`,
+    body,
+  }),
+
+  "shops/production-partners": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/production-partners`,
+  }),
+
+  // ── Categories ────────────────────────────
+  "categories/list": () => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/seller-taxonomy/nodes`,
+  }),
+
+  "categories/get": ({ taxonomy_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/seller-taxonomy/nodes/${taxonomy_id}`,
+  }),
+
+  "categories/properties": ({ taxonomy_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/seller-taxonomy/nodes/${taxonomy_id}/properties`,
+  }),
+
+  "categories/children": ({ taxonomy_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/seller-taxonomy/nodes/${taxonomy_id}`,
+  }),
+
+  // ── Users ─────────────────────────────────
+  "users/me": () => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/users/me`,
+  }),
+
+  "users/get": ({ user_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/users/${user_id}`,
+  }),
+
+  "users/addresses": ({ user_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/users/${user_id}/addresses`,
+  }),
+
+  // ── Shipping ──────────────────────────────
+  "shipping/profiles": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles`,
+  }),
+
+  "shipping/profile": ({ shop_id, profile_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}`,
+  }),
+
+  "shipping/create": ({ shop_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles`,
+    body,
+  }),
+
+  "shipping/update": ({ shop_id, profile_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}`,
+    body,
+  }),
+
+  "shipping/delete": ({ shop_id, profile_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}`,
+  }),
+
+  "shipping/destinations": ({ shop_id, profile_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}/destinations`,
+  }),
+
+  "shipping/upgrades": ({ shop_id, profile_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}/upgrades`,
+  }),
+
+  // ── Images & Media ────────────────────────
+  "images/listing": ({ listing_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/listings/${listing_id}/images`,
+  }),
+
+  "images/upload": ({ shop_id, listing_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/images`,
+    body,
+  }),
+
+  "images/delete": ({ shop_id, listing_id, listing_image_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/images/${listing_image_id}`,
+  }),
+
+  // ── Shop Policies ─────────────────────────
+  "policies/get": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies`,
+  }),
+};
+
+// ─── Core proxy function ─────────────────────
+
+export interface ProxyResult {
+  ok: boolean;
+  status: number;
+  data: unknown;
+}
+
+export async function proxyEtsyRequest(
+  endpoint: string,
+  params: Record<string, string>,
+  body?: unknown
+): Promise<ProxyResult> {
+  const handler = ROUTE_MAP[endpoint];
+
+  if (!handler) {
+    return {
+      ok: false,
+      status: 404,
+      data: { error: `Unknown endpoint: ${endpoint}` },
+    };
+  }
+
+  const { method, url, body: routeBody } = handler(params, body);
+
+  const headers: Record<string, string> = {
+    "x-api-key": API_KEY,
+    "Accept": "application/json",
+  };
+
+  if (routeBody) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const fetchOpts: RequestInit = {
+    method,
+    headers,
+    ...(routeBody ? { body: JSON.stringify(routeBody) } : {}),
+  };
+
+  const res = await fetch(url, fetchOpts);
+  const data = await res.json().catch(() => ({ error: "Non-JSON response from Etsy" }));
+
+  return { ok: res.ok, status: res.status, data };
+}
+
+// ─── Helper ──────────────────────────────────
+
+function buildUrl(base: string, params: Record<string, string | undefined>): string {
+  const url = new URL(base);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined) url.searchParams.set(k, v);
+  }
+  return url.toString();
+}
+
+export { ROUTE_MAP };

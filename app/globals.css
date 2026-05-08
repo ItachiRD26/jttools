@@ -1,26 +1,84 @@
+/* ─────────────────────────────────────────────
+   UBICACIÓN: app/globals.css
+   Tailwind v4 — un solo @import reemplaza los
+   tres @tailwind base/components/utilities
+   El theme va dentro de @theme en vez de tailwind.config
+───────────────────────────────────────────── */
+
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ── Theme (reemplaza tailwind.config.ts en v4) ── */
+@theme {
+  /* Fuentes */
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), "JetBrains Mono", monospace;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  /* Color brand */
+  --color-brand:       #7F77DD;
+  --color-brand-dark:  #6B62CC;
+  --color-brand-light: #9F97FF;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  /* Animaciones */
+  --animate-fade-up: fadeUp 0.5s ease forwards;
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 }
 
+/* ── Base ────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: #0a0a0f;
+  color: #ffffff;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code, pre {
+  font-family: var(--font-mono);
+}
+
+/* ── Custom scrollbar ────────────────────── */
+::-webkit-scrollbar        { width: 4px; height: 4px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: rgba(255,255,255,0.1); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* ── Utilidades custom ───────────────────── */
+@utility bg-grid {
+  background-image:
+    linear-gradient(rgba(127,119,221,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(127,119,221,0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+@utility animate-fade-up {
+  animation: var(--animate-fade-up);
+}
+
+@utility delay-100 { animation-delay: 100ms; }
+@utility delay-200 { animation-delay: 200ms; }
+@utility delay-300 { animation-delay: 300ms; }
+@utility delay-400 { animation-delay: 400ms; }
+@utility delay-500 { animation-delay: 500ms; }
+
+/* ── Focus + selection ───────────────────── */
+:focus-visible {
+  outline: 2px solid #7F77DD;
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(127,119,221,0.3);
+  color: #fff;
 }
