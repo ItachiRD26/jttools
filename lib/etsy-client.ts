@@ -4,7 +4,8 @@
 // ─────────────────────────────────────────────
 
 const ETSY_BASE = "https://openapi.etsy.com/v3";
-const API_KEY = process.env.ETSY_API_KEY!;
+// Etsy Commercial Access requires format: keystring:shared_secret
+const API_KEY = `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
 // Each user passes their own shop_id per request — no server default needed
 function requireShopId(id: string | undefined): string {
   if (!id) throw new Error("Missing required parameter: shop_id. Pass your Etsy shop ID in the query string.");
