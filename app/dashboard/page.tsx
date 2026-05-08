@@ -25,6 +25,9 @@ interface UserData {
   name: string;
   planId: string;
   apiKey?: string;
+  etsyConnected?: boolean;
+  etsyShopId?: string;
+  etsyShopName?: string;
 }
 
 const PLAN_LABELS: Record<string, { label: string; color: string }> = {
@@ -47,6 +50,8 @@ function DashboardContent() {
   const [loading, setLoading]         = useState(true);
   const [generatingKey, setGeneratingKey] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [connectingEtsy, setConnectingEtsy] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [capturingPayment, setCapturingPayment] = useState(false);
   const [paymentMsg, setPaymentMsg]   = useState("");
 
@@ -112,9 +117,52 @@ function DashboardContent() {
         setPaymentMsg("Payment cancelled. You can try again anytime.");
         router.replace("/dashboard");
       }
+      const etsyStatus = searchParams.get("etsy");
+      if (etsyStatus === "connected") {
+        setPaymentMsg("✓ Etsy shop connected successfully!");
+        router.replace("/dashboard");
+      }
+      if (etsyStatus === "cancelled") {
+        setPaymentMsg("Etsy connection cancelled.");
+        router.replace("/dashboard");
+      }
+      if (etsyStatus === "error") {
+        setPaymentMsg("Error connecting Etsy shop. Please try again.");
+        router.replace("/dashboard");
+      }
     });
     return () => unsub();
   }, [router, searchParams, fetchUsage, capturePaypalPayment]);
+
+
+  async function connectEtsy() {
+    if (!user) return;
+    setConnectingEtsy(true);
+    try {
+      const token = await user.getIdToken();
+      // Redirect to OAuth flow with token
+      window.location.href = `/api/auth/etsy?token=${token}`;
+    } catch {
+      alert("Error connecting Etsy. Please try again.");
+      setConnectingEtsy(false);
+    }
+  }
+
+  async function disconnectEtsy() {
+    if (!user) return;
+    const confirmed = window.confirm("Disconnect your Etsy shop? Private endpoints will stop working.");
+    if (!confirmed) return;
+    try {
+      const token = await user.getIdToken();
+      await fetch("/api/auth/etsy/disconnect", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setUserData((prev) => prev ? { ...prev, etsyConnected: false, etsyShopId: undefined, etsyShopName: undefined } : prev);
+    } catch {
+      alert("Error disconnecting. Please try again.");
+    }
+  }
 
 
   async function cancelPlan() {
@@ -197,9 +245,12 @@ function DashboardContent() {
           <a href="/docs"    className="text-sm text-white/50 hover:text-white transition-colors">Docs</a>
           <a href="/pricing" className="text-sm text-white/50 hover:text-white transition-colors">Pricing</a>
           <div className="flex items-center gap-3">
-            <div className="w-7 h-7 rounded-full bg-[#7F77DD]/20 border border-[#7F77DD]/30 flex items-center justify-center text-xs font-medium text-[#7F77DD]">
+            <button
+              onClick={() => setProfileOpen(true)}
+              className="w-7 h-7 rounded-full bg-[#7F77DD]/20 border border-[#7F77DD]/30 flex items-center justify-center text-xs font-medium text-[#7F77DD] hover:bg-[#7F77DD]/30 transition-colors"
+            >
               {userData?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase()}
-            </div>
+            </button>
             <button
               onClick={() => signOut(auth).then(() => router.push("/auth"))}
               className="text-xs text-white/30 hover:text-white/60 transition-colors"
@@ -338,6 +389,48 @@ function DashboardContent() {
           )}
         </div>
 
+
+        {/* Etsy Connection */}
+        <div className="bg-white/3 border border-white/8 rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-1">Etsy Shop</p>
+              {userData?.etsyConnected && userData.etsyShopName ? (
+                <p className="text-sm font-medium text-emerald-400">✓ {userData.etsyShopName}</p>
+              ) : (
+                <p className="text-sm text-white/40">Not connected</p>
+              )}
+            </div>
+            {userData?.etsyConnected ? (
+              <button
+                onClick={disconnectEtsy}
+                className="text-xs px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 rounded-lg transition-colors"
+              >
+                Disconnect
+              </button>
+            ) : (
+              <button
+                onClick={connectEtsy}
+                disabled={connectingEtsy}
+                className="text-xs px-3 py-1.5 bg-[#7F77DD]/10 hover:bg-[#7F77DD]/20 border border-[#7F77DD]/20 text-[#7F77DD] rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {connectingEtsy ? (
+                  <span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                ) : null}
+                Connect Etsy Shop
+              </button>
+            )}
+          </div>
+          {!userData?.etsyConnected && (
+            <p className="text-xs text-white/30 leading-relaxed">
+              Connect your Etsy shop to enable private endpoints — create listings, manage orders, upload images, and more.
+            </p>
+          )}
+          {userData?.etsyConnected && userData.etsyShopId && (
+            <p className="text-xs text-white/30 font-mono">Shop ID: {userData.etsyShopId}</p>
+          )}
+        </div>
+
         {/* Quick start */}
         {apiKey && (
           <div className="bg-white/3 border border-white/8 rounded-2xl p-5">
@@ -368,6 +461,145 @@ function DashboardContent() {
           </div>
         )}
       </div>
+
+      {/* Profile Modal */}
+      {profileOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setProfileOpen(false)}
+          />
+
+          {/* Modal */}
+          <div className="relative w-full max-w-md bg-[#111118] border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/6">
+              <h2 className="text-base font-semibold text-white">Account</h2>
+              <button
+                onClick={() => setProfileOpen(false)}
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-white/40 hover:text-white hover:bg-white/6 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              {/* User info */}
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-[#7F77DD]/20 border border-[#7F77DD]/30 flex items-center justify-center text-lg font-semibold text-[#7F77DD]">
+                  {userData?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase()}
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-white">{userData?.name ?? "User"}</p>
+                  <p className="text-xs text-white/40 font-mono">{userData?.email}</p>
+                </div>
+              </div>
+
+              <div className="h-px bg-white/6" />
+
+              {/* Subscription */}
+              <div>
+                <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3">Subscription</p>
+                <div className="bg-white/3 border border-white/6 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-white/50">Current plan</span>
+                    <span className={`text-sm font-semibold ${PLAN_LABELS[userData?.planId ?? "free"]?.color}`}>
+                      {PLAN_LABELS[userData?.planId ?? "free"]?.label}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-white/50">Daily limit</span>
+                    <span className="text-sm font-mono text-white/70">
+                      {usage?.dailyLimit?.toLocaleString() ?? "100"} req/day
+                    </span>
+                  </div>
+                  {userData?.planId !== "free" && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-white/50">Status</span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        Active
+                      </span>
+                    </div>
+                  )}
+                  {usage && (
+                    <div>
+                      <div className="flex justify-between text-xs text-white/30 mb-1.5">
+                        <span>Today&apos;s usage</span>
+                        <span>{usage.used} / {usage.dailyLimit}</span>
+                      </div>
+                      <div className="h-1 bg-white/6 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[#7F77DD] rounded-full"
+                          style={{ width: `${Math.min(100, (usage.used / usage.dailyLimit) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-2 mt-3">
+                  <a
+                    href="/pricing"
+                    onClick={() => setProfileOpen(false)}
+                    className="flex-1 text-center py-2 text-xs font-medium bg-[#7F77DD]/10 hover:bg-[#7F77DD]/20 border border-[#7F77DD]/20 text-[#7F77DD] rounded-lg transition-colors"
+                  >
+                    {userData?.planId === "free" ? "Upgrade plan" : "Change plan"}
+                  </a>
+                  {userData?.planId !== "free" && (
+                    <button
+                      onClick={() => { setProfileOpen(false); cancelPlan(); }}
+                      className="flex-1 py-2 text-xs font-medium bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 rounded-lg transition-colors"
+                    >
+                      Cancel plan
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="h-px bg-white/6" />
+
+              {/* Etsy connection */}
+              <div>
+                <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3">Etsy Shop</p>
+                {userData?.etsyConnected ? (
+                  <div className="flex items-center justify-between bg-white/3 border border-white/6 rounded-xl p-3">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                      <span className="text-sm text-white/70">{userData.etsyShopName ?? "Connected"}</span>
+                    </div>
+                    <button
+                      onClick={() => { setProfileOpen(false); disconnectEtsy(); }}
+                      className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setProfileOpen(false); connectEtsy(); }}
+                    className="w-full py-2 text-xs font-medium bg-white/4 hover:bg-white/8 border border-white/8 text-white/60 hover:text-white rounded-lg transition-colors"
+                  >
+                    Connect Etsy Shop
+                  </button>
+                )}
+              </div>
+
+              <div className="h-px bg-white/6" />
+
+              {/* Sign out */}
+              <button
+                onClick={() => { setProfileOpen(false); signOut(auth).then(() => router.push("/auth")); }}
+                className="w-full py-2.5 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/5 border border-red-500/10 rounded-xl transition-colors"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

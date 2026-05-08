@@ -2,8 +2,8 @@
 // LOCATION: app/auth/page.tsx
 // ROUTE: /auth
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   getAuth,
   signInWithEmailAndPassword,
@@ -17,14 +17,27 @@ import { app } from "@/lib/firebase-client";
 const auth = getAuth(app);
 const db   = getFirestore(app);
 
-export default function AuthPage() {
+function AuthContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [mode, setMode]       = useState<"login" | "signup">("login");
   const [email, setEmail]     = useState("");
   const [password, setPassword] = useState("");
   const [name, setName]       = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((user) => {
+      if (user) {
+        router.replace("/dashboard");
+      } else {
+        setChecking(false);
+      }
+    });
+    return () => unsub();
+  }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,7 +52,13 @@ export default function AuthPage() {
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
-      router.push("/dashboard");
+      const redirect = searchParams.get("redirect");
+      const plan = searchParams.get("plan");
+      if (redirect && plan) {
+        router.push(`${redirect}?plan=${plan}`);
+      } else {
+        router.push("/dashboard");
+      }
     } catch (err: unknown) {
       setError(friendlyError(err instanceof Error ? err.message : "Error"));
     } finally {
@@ -57,12 +76,26 @@ export default function AuthPage() {
         { email: user.email, name: user.displayName, planId: "free", createdAt: serverTimestamp() },
         { merge: true }
       );
-      router.push("/dashboard");
+      const redirect = searchParams.get("redirect");
+      const plan = searchParams.get("plan");
+      if (redirect && plan) {
+        router.push(`${redirect}?plan=${plan}`);
+      } else {
+        router.push("/dashboard");
+      }
     } catch (err: unknown) {
       setError(friendlyError(err instanceof Error ? err.message : "Error"));
     } finally {
       setLoading(false);
     }
+  }
+
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
+        <div className="w-5 h-5 border-2 border-[#7F77DD] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
   }
 
   return (
@@ -185,4 +218,16 @@ function friendlyError(msg: string): string {
   if (msg.includes("popup-closed"))        return "Sign in cancelled.";
   if (msg.includes("popup-blocked"))       return "Popup blocked. Please allow popups for this site.";
   return "Something went wrong. Please try again.";
+}
+
+export default function AuthPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
+        <div className="w-5 h-5 border-2 border-[#7F77DD] border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <AuthContent />
+    </Suspense>
+  );
 }

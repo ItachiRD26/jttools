@@ -14,9 +14,17 @@ export interface ApiKeyDoc {
   createdAt: FirebaseFirestore.Timestamp;
 }
 
+export interface ApiError {
+  code: string;
+  status: number;
+  message: string;
+  hint?: string;
+  docs?: string;
+}
+
 export type AuthResult =
   | { ok: true;  userId: string; plan: Plan; remaining: number }
-  | { ok: false; status: 401 | 403 | 429; message: string };
+  | { ok: false; status: 401 | 403 | 429; error: ApiError };
 
 // ─── Main validate + rate-limit function ────
 
@@ -28,7 +36,13 @@ export async function validateRequest(
 
   // 1. Require API key
   if (!apiKey) {
-    return { ok: false, status: 401, message: "Missing API key. Pass it as `x-api-key` header." };
+    return { ok: false, status: 401, error: {
+      code: "MISSING_API_KEY",
+      status: 401,
+      message: "No API key provided.",
+      hint: "Pass your key via the x-api-key header.",
+      docs: "https://jeterdev.tools/docs#authentication"
+    }};
   }
 
   // 2. Look up key document
@@ -36,13 +50,25 @@ export async function validateRequest(
   const keySnap = await keyRef.get();
 
   if (!keySnap.exists) {
-    return { ok: false, status: 401, message: "Invalid API key." };
+    return { ok: false, status: 401, error: {
+      code: "INVALID_API_KEY",
+      status: 401,
+      message: "Your API key is missing, invalid, or has been revoked.",
+      hint: "Generate a new key at jeterdev.tools/dashboard.",
+      docs: "https://jeterdev.tools/docs#authentication"
+    }};
   }
 
   const keyDoc = keySnap.data() as ApiKeyDoc;
 
   if (!keyDoc.active) {
-    return { ok: false, status: 403, message: "API key is disabled." };
+    return { ok: false, status: 403, error: {
+      code: "API_KEY_DISABLED",
+      status: 403,
+      message: "This API key has been disabled.",
+      hint: "Generate a new key at jeterdev.tools/dashboard.",
+      docs: "https://jeterdev.tools/docs#authentication"
+    }};
   }
 
   // 3. Resolve plan
@@ -53,7 +79,13 @@ export async function validateRequest(
     return {
       ok: false,
       status: 403,
-      message: `Endpoint '${endpoint}' is not available on the ${plan.name} plan. Upgrade to access it.`,
+      error: {
+        code: "ENDPOINT_NOT_IN_PLAN",
+        status: 403,
+        message: `Endpoint '${endpoint}' is not available on the ${plan.name} plan.`,
+        hint: `Upgrade to access this endpoint at jeterdev.tools/pricing.`,
+        docs: "https://jeterdev.tools/docs#rate-limits"
+      }
     };
   }
 
@@ -88,7 +120,13 @@ export async function validateRequest(
     return {
       ok: false,
       status: 429,
-      message: `Daily limit of ${plan.dailyLimit} requests reached. Resets at midnight UTC.`,
+      error: {
+        code: "RATE_LIMIT_DAILY",
+        status: 429,
+        message: `Daily request limit reached (${plan.dailyLimit}/day).`,
+        hint: "Limit resets at midnight UTC.",
+        docs: "https://jeterdev.tools/docs#rate-limits"
+      }
     };
   }
 

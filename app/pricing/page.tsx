@@ -2,9 +2,9 @@
 // LOCATION: app/pricing/page.tsx
 // ROUTE: /pricing
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { getAuth } from "firebase/auth";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { getAuth, onAuthStateChanged, User } from "firebase/auth";
 import { app } from "@/lib/firebase-client";
 
 const auth = getAuth(app);
@@ -62,20 +62,39 @@ const PLANS = [
   },
 ];
 
-export default function PricingPage() {
-  const router = useRouter();
+function PricingContent() {
+  const router       = useRouter();
+  const searchParams = useSearchParams();
+  const [user, setUser]             = useState<User | null>(null);
+  const [checking, setChecking]     = useState(true);
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError]           = useState("");
 
-  async function handleSelect(plan: typeof PLANS[0]) {
-    setError("");
-    const user = auth.currentUser;
-    if (!user) { router.push("/auth"); return; }
-    if (plan.id === "free") { router.push("/dashboard"); return; }
+  // Check for pending plan after login redirect
+  const pendingPlan = searchParams.get("plan");
 
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setChecking(false);
+
+      // If user just logged in and has a pending plan, auto-trigger payment
+      if (u && pendingPlan) {
+        const plan = PLANS.find((p) => p.id === pendingPlan);
+        if (plan && plan.price > 0) {
+          triggerPayment(u, plan);
+        } else if (plan?.price === 0) {
+          router.replace("/dashboard");
+        }
+      }
+    });
+    return () => unsub();
+  }, [router, pendingPlan]);
+
+  async function triggerPayment(currentUser: User, plan: typeof PLANS[0]) {
     setLoadingPlan(plan.id);
     try {
-      const token = await user.getIdToken();
+      const token = await currentUser.getIdToken();
       const res = await fetch("/api/paypal/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -91,6 +110,32 @@ export default function PricingPage() {
     }
   }
 
+  async function handleSelect(plan: typeof PLANS[0]) {
+    setError("");
+
+    // Not logged in → redirect to auth with plan saved in URL
+    if (!user) {
+      router.push(`/auth?redirect=/pricing&plan=${plan.id}`);
+      return;
+    }
+
+    // Free plan → dashboard
+    if (plan.price === 0) {
+      router.push("/dashboard");
+      return;
+    }
+
+    await triggerPayment(user, plan);
+  }
+
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
+        <div className="w-5 h-5 border-2 border-[#7F77DD] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white">
       <div
@@ -103,18 +148,24 @@ export default function PricingPage() {
 
       {/* Nav */}
       <nav className="relative flex items-center justify-between px-8 py-4 border-b border-white/6">
-        <a href="/" className="text-lg font-semibold"><img src="/logo.webp" alt="JeterDev Tools" className="h-16 w-auto" /></a>
+        <a href="/" className="flex items-center">
+          <img src="/logo.webp" alt="JeterDev Tools" className="h-16 w-auto" />
+        </a>
         <div className="flex items-center gap-5">
           <a href="/docs"      className="text-sm text-white/50 hover:text-white transition-colors">Docs</a>
-          <a href="/dashboard" className="text-sm text-white/50 hover:text-white transition-colors">Dashboard</a>
-          <a href="/auth"      className="text-sm px-4 py-1.5 bg-[#7F77DD] hover:bg-[#6B62CC] text-white rounded-lg transition-colors font-medium">
-            Get started
-          </a>
+          {user ? (
+            <a href="/dashboard" className="text-sm px-4 py-1.5 bg-[#7F77DD] hover:bg-[#6B62CC] text-white rounded-lg transition-colors font-medium">
+              Dashboard
+            </a>
+          ) : (
+            <a href="/auth" className="text-sm px-4 py-1.5 bg-[#7F77DD] hover:bg-[#6B62CC] text-white rounded-lg transition-colors font-medium">
+              Sign in
+            </a>
+          )}
         </div>
       </nav>
 
       <div className="relative max-w-4xl mx-auto px-6 py-20">
-        {/* Header */}
         <div className="text-center mb-16">
           <p className="text-xs font-mono text-[#7F77DD] tracking-widest uppercase mb-4">Pricing</p>
           <h1 className="text-4xl font-semibold tracking-tight mb-4">Simple, transparent pricing</h1>
@@ -123,13 +174,23 @@ export default function PricingPage() {
           </p>
         </div>
 
+        {/* Not logged in banner */}
+        {!user && (
+          <div className="max-w-3xl mx-auto mb-8 flex items-center gap-3 px-4 py-3 bg-[#7F77DD]/10 border border-[#7F77DD]/20 rounded-xl text-sm text-[#7F77DD]">
+            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>You&apos;ll be asked to sign in before completing your purchase.</span>
+          </div>
+        )}
+
         {error && (
           <div className="max-w-md mx-auto mb-8 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-center">
             {error}
           </div>
         )}
 
-        {/* 3 plans */}
+        {/* Plans */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5 max-w-3xl mx-auto">
           {PLANS.map((plan) => (
             <div
@@ -170,7 +231,9 @@ export default function PricingPage() {
               >
                 {loadingPlan === plan.id
                   ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  : plan.price === 0 ? "Get started free" : "Pay with PayPal"}
+                  : plan.price === 0
+                  ? "Get started free"
+                  : user ? "Pay with PayPal" : "Select plan"}
               </button>
             </div>
           ))}
@@ -195,5 +258,19 @@ export default function PricingPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+import { Suspense } from "react";
+
+export default function PricingPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
+        <div className="w-5 h-5 border-2 border-[#7F77DD] border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <PricingContent />
+    </Suspense>
   );
 }

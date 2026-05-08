@@ -250,6 +250,154 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
     method: "GET",
     url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies`,
   }),
+
+  // ── Store Management ──────────────────────
+  "store/receipt": ({ shop_id, receipt_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/receipts/${receipt_id}`,
+  }),
+
+  "store/receipt/update": ({ shop_id, receipt_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/receipts/${receipt_id}`,
+    body,
+  }),
+
+  "store/section/create": ({ shop_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/sections`,
+    body,
+  }),
+
+  "store/section/update": ({ shop_id, shop_section_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/sections/${shop_section_id}`,
+    body,
+  }),
+
+  "store/section/delete": ({ shop_id, shop_section_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/sections/${shop_section_id}`,
+  }),
+
+  // ── Images & Media (expanded) ─────────────
+  "images/get": ({ listing_id, listing_image_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/listings/${listing_id}/images/${listing_image_id}`,
+  }),
+
+  "media/files": ({ shop_id, listing_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/files`,
+  }),
+
+  "media/file/upload": ({ shop_id, listing_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/files`,
+    body,
+  }),
+
+  "media/file/delete": ({ shop_id, listing_id, listing_file_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/files/${listing_file_id}`,
+  }),
+
+  "media/video": ({ listing_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/listings/${listing_id}/videos`,
+  }),
+
+  "media/video/upload": ({ shop_id, listing_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/videos`,
+    body,
+  }),
+
+  // ── Listing Properties (expanded) ─────────
+  "listings/property/update": ({ shop_id, listing_id, property_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/properties/${property_id}`,
+    body,
+  }),
+
+  "listings/property/delete": ({ shop_id, listing_id, property_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/properties/${property_id}`,
+  }),
+
+  // ── Shop Policies (expanded to 14) ────────
+  "policies/create": ({ shop_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies`,
+    body,
+  }),
+
+  "policies/update": ({ shop_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies`,
+    body,
+  }),
+
+  "policies/delete": ({ shop_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies`,
+  }),
+
+  "policies/privacy": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/privacy`,
+  }),
+
+  "policies/privacy/create": ({ shop_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/privacy`,
+    body,
+  }),
+
+  "policies/privacy/update": ({ shop_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/privacy`,
+    body,
+  }),
+
+  "policies/privacy/delete": ({ shop_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/privacy`,
+  }),
+
+  "policies/refund": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/refund`,
+  }),
+
+  "policies/refund/create": ({ shop_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/refund`,
+    body,
+  }),
+
+  "policies/refund/update": ({ shop_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/refund`,
+    body,
+  }),
+
+  "policies/refund/delete": ({ shop_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/refund`,
+  }),
+
+  "policies/shipping": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/shipping`,
+  }),
+
+  "policies/payment": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/payment`,
+  }),
+
+
 };
 
 // ─── Core proxy function ─────────────────────
@@ -263,7 +411,8 @@ export interface ProxyResult {
 export async function proxyEtsyRequest(
   endpoint: string,
   params: Record<string, string>,
-  body?: unknown
+  body?: unknown,
+  accessToken?: string  // OAuth token for private endpoints
 ): Promise<ProxyResult> {
   const handler = ROUTE_MAP[endpoint];
 
@@ -280,6 +429,8 @@ export async function proxyEtsyRequest(
   const headers: Record<string, string> = {
     "x-api-key": API_KEY,
     "Accept": "application/json",
+    // If OAuth token provided, add Authorization header for private endpoints
+    ...(accessToken ? { "Authorization": `Bearer ${accessToken}` } : {}),
   };
 
   if (routeBody) {
