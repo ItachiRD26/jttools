@@ -112,7 +112,7 @@ export default function LandingPage() {
             <div><span className="text-white/30"># Search active listings</span></div>
             <div>
               <span className="text-emerald-400">curl</span>{" "}
-              <span className="text-amber-300">&quot;https://jeterdev.tools/v1/listings/search?query=handmade+art&amp;limit=5&quot;</span>{" "}
+              <span className="text-amber-300">&quot;https://jeterdev.tools/api/v1/listings/search?query=handmade+art&amp;limit=5&quot;</span>{" "}
               <span className="text-white/50">\</span>
             </div>
             <div>&nbsp;&nbsp;<span className="text-white/50">-H</span>{" "}<span className="text-amber-300">&quot;x-api-key: jt_a3f4b5c6d7e8...&quot;</span></div>
