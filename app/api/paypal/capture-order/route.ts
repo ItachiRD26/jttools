@@ -70,9 +70,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Payment not completed" }, { status: 400 });
   }
 
-  // 3. Extract planId from custom_id
+  // 3. Extract planId and verify amount matches
   const planId: string =
     capture.purchase_units?.[0]?.payments?.captures?.[0]?.custom_id ?? "free";
+
+  const capturedAmount = parseFloat(
+    capture.purchase_units?.[0]?.payments?.captures?.[0]?.amount?.value ?? "0"
+  );
+
+  const { PLANS } = await import("@/lib/plans");
+  const expectedAmount = PLANS[planId as keyof typeof PLANS]?.price ?? 0;
+
+  if (Math.abs(capturedAmount - expectedAmount) > 0.01) {
+    console.error(`[PayPal] Amount mismatch: captured $${capturedAmount}, expected $${expectedAmount} for plan ${planId}`);
+    return NextResponse.json({ error: "Payment amount mismatch" }, { status: 400 });
+  }
 
   // 4. Activate plan — revokes old key, creates new key, sends email, updates Firestore
   const newApiKey = await activatePlan(uid, planId, orderId);

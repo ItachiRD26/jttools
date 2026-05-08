@@ -2,31 +2,27 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── API Keys ──────────────────────────────
-    // Only server (Admin SDK) should touch these.
-    // No client reads or writes.
-    match /apiKeys/{key} {
+    // Órdenes — solo el dueño
+    match /orders/{orderId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == resource.data.userId;
+    }
+
+    // Datos del usuario y subcolecciones
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == userId;
+    }
+
+    // Sync logs — solo el dueño
+    match /sync_logs/{logId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == resource.data.userId;
+    }
+
+    // OAuth states — solo escritura del server (Admin SDK bypasses rules)
+    match /oauth_states/{stateId} {
       allow read, write: if false;
     }
-
-    // ── Usage ─────────────────────────────────
-    match /usage/{key} {
-      allow read, write: if false;
-      match /daily/{date} {
-        allow read, write: if false;
-      }
-    }
-
-    // ── Users ─────────────────────────────────
-    // Authenticated users can read/write their own doc.
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-
-    // ── Logs ──────────────────────────────────
-    match /logs/{logId} {
-      allow read, write: if false;
-    }
-
   }
 }

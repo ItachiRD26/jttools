@@ -344,7 +344,7 @@ function DashboardContent() {
             <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3">Quick start</p>
             <div className="bg-black/40 border border-white/6 rounded-xl p-4 font-mono text-xs text-white/60 leading-relaxed overflow-x-auto">
               <span className="text-white/25"># Search listings</span><br />
-              curl &quot;https://api.jt.tools/v1/listings/search?query=art&quot; \<br />
+              curl &quot;https://jeterdev.tools/v1/listings/search?query=art&quot; \<br />
               &nbsp;&nbsp;-H &quot;x-api-key: {keyVisible ? apiKey : maskedKey}&quot;
             </div>
             <div className="flex gap-4 mt-3">

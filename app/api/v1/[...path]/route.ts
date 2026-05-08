@@ -72,13 +72,19 @@ export async function OPTIONS() {
 
 // ─── Helpers ─────────────────────────────────
 
-function corsHeaders(): Record<string, string> {
+function corsHeaders(req?: Request): Record<string, string> {
+  // Allow any origin — this is a public API bridge (intentional)
+  // Each request is authenticated via x-api-key regardless of origin
+  const origin = req ? (req.headers.get("origin") ?? "*") : "*";
   return {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, x-api-key",
     "Access-Control-Expose-Headers":
       "X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Plan",
+    "Access-Control-Allow-Credentials": "false",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
   };
 }
 
