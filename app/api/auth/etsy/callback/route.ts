@@ -1,18 +1,16 @@
 // LOCATION: app/api/auth/etsy/callback/route.ts
-// GET /api/auth/etsy/callback
-// Etsy redirects here after user authorizes — exchanges code for tokens
+// Etsy redirects here after user authorizes
 
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminApp, getDb } from "@/lib/firebase-admin";
 import {
   exchangeCodeForTokens,
-  saveEtsyTokens,
-  etsyAuthenticatedRequest,
+  saveStoreConnection,
 } from "@/lib/etsy-oauth";
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL!;
-
 export async function GET(req: NextRequest) {
+  const APP_URL = process.env.NEXT_PUBLIC_APP_URL!;
+  const API_KEY = process.env.ETSY_API_KEY!;
   getAdminApp();
   const db = getDb();
 
@@ -21,31 +19,21 @@ export async function GET(req: NextRequest) {
   const state = searchParams.get("state");
   const error = searchParams.get("error");
 
-  // ── User denied access ────────────────────────────────────────────────────
-  if (error) {
-    return NextResponse.redirect(`${APP_URL}/dashboard?etsy=cancelled`);
-  }
+  if (error) return NextResponse.redirect(`${APP_URL}/dashboard?etsy=cancelled`);
+  if (!code || !state) return NextResponse.redirect(`${APP_URL}/dashboard?etsy=error`);
 
-  if (!code || !state) {
-    return NextResponse.redirect(`${APP_URL}/dashboard?etsy=error&reason=missing_params`);
-  }
-
-  // ── Retrieve pending OAuth state ──────────────────────────────────────────
+  // Retrieve pending state
   const pendingSnap = await db.collection("oauthPending").doc(state).get();
-  if (!pendingSnap.exists) {
-    return NextResponse.redirect(`${APP_URL}/dashboard?etsy=error&reason=invalid_state`);
-  }
+  if (!pendingSnap.exists) return NextResponse.redirect(`${APP_URL}/dashboard?etsy=error&reason=invalid_state`);
 
   const { uid, codeVerifier, expiresAt } = pendingSnap.data()!;
-
-  // Check not expired
   const expiry = expiresAt instanceof Date ? expiresAt : expiresAt.toDate();
   if (new Date() > expiry) {
     await db.collection("oauthPending").doc(state).delete();
     return NextResponse.redirect(`${APP_URL}/dashboard?etsy=error&reason=expired`);
   }
 
-  // ── Exchange code for tokens ──────────────────────────────────────────────
+  // Exchange code for tokens
   let tokens;
   try {
     tokens = await exchangeCodeForTokens(code, codeVerifier);
@@ -54,57 +42,51 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(`${APP_URL}/dashboard?etsy=error&reason=token_exchange`);
   }
 
-  // ── Get Etsy user info ────────────────────────────────────────────────────
+  // Get Etsy user and shop info using the new token
   let etsyUserId = "";
-  let shopId: string | undefined;
-  let shopName: string | undefined;
+  let shopId     = "";
+  let shopName   = "My Shop";
 
   try {
-    // Get user info
-    const userRes = await etsyAuthenticatedRequest(
-      uid,
-      "/application/users/me"
-    );
+    const userRes = await fetch("https://openapi.etsy.com/v3/application/users/me", {
+      headers: {
+        "x-api-key":     API_KEY,
+        "Authorization": `Bearer ${tokens.access_token}`,
+      },
+    });
 
-    // We need to temporarily save tokens to use etsyAuthenticatedRequest
-    // So save first, then get user info
-    await saveEtsyTokens(uid, tokens, "pending");
-
-    const userRes2 = await etsyAuthenticatedRequest(uid, "/application/users/me");
-    if (userRes2.ok) {
-      const userData = await userRes2.json();
+    if (userRes.ok) {
+      const userData = await userRes.json();
       etsyUserId = String(userData.user_id ?? "");
 
-      // Get their shop
-      const shopRes = await etsyAuthenticatedRequest(
-        uid,
-        `/application/users/${etsyUserId}/shops`
-      );
-      if (shopRes.ok) {
-        const shopData = await shopRes.json();
-        if (shopData.shop_id) {
-          shopId   = String(shopData.shop_id);
-          shopName = shopData.shop_name;
+      // Get their shops
+      const shopsRes = await fetch(
+        `https://openapi.etsy.com/v3/application/users/${etsyUserId}/shops`,
+        {
+          headers: {
+            "x-api-key":     API_KEY,
+            "Authorization": `Bearer ${tokens.access_token}`,
+          },
         }
+      );
+
+      if (shopsRes.ok) {
+        const shopsData = await shopsRes.json();
+        shopId   = String(shopsData.shop_id ?? "");
+        shopName = shopsData.shop_name ?? "My Shop";
       }
     }
   } catch (err) {
-    console.error("[OAuth] Failed to get user info:", err);
+    console.error("[OAuth] Failed to get user/shop info:", err);
   }
 
-  // ── Save final tokens with user info ─────────────────────────────────────
-  await saveEtsyTokens(uid, tokens, etsyUserId, shopId, shopName);
+  // Save per-shop connection
+  if (shopId) {
+    await saveStoreConnection(uid, tokens, shopId, shopName, etsyUserId);
+  }
 
-  // ── Update user doc with shop info ───────────────────────────────────────
-  await db.collection("users").doc(uid).update({
-    etsyConnected: true,
-    etsyShopId:    shopId ?? null,
-    etsyShopName:  shopName ?? null,
-  });
-
-  // ── Clean up pending state ────────────────────────────────────────────────
+  // Clean up
   await db.collection("oauthPending").doc(state).delete();
 
-  // ── Redirect to dashboard with success ───────────────────────────────────
-  return NextResponse.redirect(`${APP_URL}/dashboard?etsy=connected`);
+  return NextResponse.redirect(`${APP_URL}/dashboard?etsy=connected&shop=${shopName}`);
 }

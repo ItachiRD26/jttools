@@ -1,13 +1,12 @@
-// LOCATION: app/api/auth/etsy/disconnect/route.ts
-// POST /api/auth/etsy/disconnect
-// Body: { shopId: string }
+// LOCATION: app/api/auth/etsy/stores/route.ts
+// GET /api/auth/etsy/stores — returns all connected Etsy shops for the user
 
 import { NextRequest, NextResponse } from "next/server";
 import { getAuth } from "firebase-admin/auth";
 import { getAdminApp } from "@/lib/firebase-admin";
-import { disconnectStore } from "@/lib/etsy-oauth";
+import { getAllStoreConnections } from "@/lib/etsy-oauth";
 
-export async function POST(req: NextRequest) {
+export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -22,9 +21,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid token" }, { status: 401 });
   }
 
-  const { shopId } = await req.json();
-  if (!shopId) return NextResponse.json({ error: "shopId required" }, { status: 400 });
+  const connections = await getAllStoreConnections(uid);
 
-  await disconnectStore(uid, shopId);
-  return NextResponse.json({ success: true });
+  // Return only safe fields — never expose tokens to the client
+  const stores = connections.map(c => ({
+    shopId:     c.shopId,
+    shopName:   c.shopName,
+    etsyUserId: c.etsyUserId,
+    connectedAt: c.connectedAt,
+  }));
+
+  return NextResponse.json({ stores });
 }

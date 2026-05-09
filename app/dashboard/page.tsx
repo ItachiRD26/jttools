@@ -20,14 +20,18 @@ interface UsageData {
   allowedEndpoints: string[];
 }
 
+interface StoreConnection {
+  shopId:    string;
+  shopName:  string;
+  etsyUserId: string;
+  connectedAt?: { toDate: () => Date } | Date;
+}
+
 interface UserData {
   email: string;
   name: string;
   planId: string;
   apiKey?: string;
-  etsyConnected?: boolean;
-  etsyShopId?: string;
-  etsyShopName?: string;
 }
 
 const PLAN_LABELS: Record<string, { label: string; color: string }> = {
@@ -50,7 +54,9 @@ function DashboardContent() {
   const [loading, setLoading]         = useState(true);
   const [generatingKey, setGeneratingKey] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [connectingEtsy, setConnectingEtsy] = useState(false);
+  const [stores, setStores]           = useState<StoreConnection[]>([]);
+  const [loadingStores, setLoadingStores] = useState(false);
+  const [connectingStore, setConnectingStore] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [capturingPayment, setCapturingPayment] = useState(false);
   const [paymentMsg, setPaymentMsg]   = useState("");
@@ -113,52 +119,70 @@ function DashboardContent() {
       if (paypalOrderId) {
         await capturePaypalPayment(paypalOrderId, u);
       }
+      const etsyStatus  = searchParams.get("etsy");
+      const etsyShop    = searchParams.get("shop");
+      if (etsyStatus === "connected") {
+        setPaymentMsg(`✓ "${etsyShop}" connected successfully!`);
+        router.replace("/dashboard");
+        fetchStores(u);
+      } else if (etsyStatus === "cancelled") {
+        setPaymentMsg("Store connection cancelled.");
+        router.replace("/dashboard");
+      } else if (etsyStatus === "error") {
+        setPaymentMsg("Error connecting store. Please try again.");
+        router.replace("/dashboard");
+      }
       if (cancelled) {
         setPaymentMsg("Payment cancelled. You can try again anytime.");
         router.replace("/dashboard");
       }
-      const etsyStatus = searchParams.get("etsy");
-      if (etsyStatus === "connected") {
-        setPaymentMsg("✓ Etsy shop connected successfully!");
-        router.replace("/dashboard");
-      }
-      if (etsyStatus === "cancelled") {
-        setPaymentMsg("Etsy connection cancelled.");
-        router.replace("/dashboard");
-      }
-      if (etsyStatus === "error") {
-        setPaymentMsg("Error connecting Etsy shop. Please try again.");
-        router.replace("/dashboard");
-      }
+
     });
     return () => unsub();
   }, [router, searchParams, fetchUsage, capturePaypalPayment]);
 
 
-  async function connectEtsy() {
+
+
+  async function fetchStores(u: typeof user) {
+    if (!u) return;
+    setLoadingStores(true);
+    try {
+      const token = await u.getIdToken();
+      const res   = await fetch("/api/auth/etsy/stores", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setStores(data.stores ?? []);
+      }
+    } catch { /* silent */ }
+    finally { setLoadingStores(false); }
+  }
+
+  async function connectStore() {
     if (!user) return;
-    setConnectingEtsy(true);
+    setConnectingStore(true);
     try {
       const token = await user.getIdToken();
-      // Redirect to OAuth flow with token
       window.location.href = `/api/auth/etsy?token=${token}`;
     } catch {
-      alert("Error connecting Etsy. Please try again.");
-      setConnectingEtsy(false);
+      alert("Error connecting store. Please try again.");
+      setConnectingStore(false);
     }
   }
 
-  async function disconnectEtsy() {
+  async function disconnectStore(shopId: string, shopName: string) {
     if (!user) return;
-    const confirmed = window.confirm("Disconnect your Etsy shop? Private endpoints will stop working.");
-    if (!confirmed) return;
+    if (!window.confirm(`Disconnect "${shopName}"? Private endpoints for this shop will stop working.`)) return;
     try {
       const token = await user.getIdToken();
       await fetch("/api/auth/etsy/disconnect", {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ shopId }),
       });
-      setUserData((prev) => prev ? { ...prev, etsyConnected: false, etsyShopId: undefined, etsyShopName: undefined } : prev);
+      setStores(prev => prev.filter(s => s.shopId !== shopId));
     } catch {
       alert("Error disconnecting. Please try again.");
     }
@@ -390,44 +414,52 @@ function DashboardContent() {
         </div>
 
 
-        {/* Etsy Connection */}
+        {/* Connected Stores */}
         <div className="bg-white/3 border border-white/8 rounded-2xl p-5">
           <div className="flex items-center justify-between mb-4">
-            <div>
-              <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-1">Etsy Shop</p>
-              {userData?.etsyConnected && userData.etsyShopName ? (
-                <p className="text-sm font-medium text-emerald-400">✓ {userData.etsyShopName}</p>
-              ) : (
-                <p className="text-sm text-white/40">Not connected</p>
-              )}
-            </div>
-            {userData?.etsyConnected ? (
-              <button
-                onClick={disconnectEtsy}
-                className="text-xs px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 rounded-lg transition-colors"
-              >
-                Disconnect
-              </button>
-            ) : (
-              <button
-                onClick={connectEtsy}
-                disabled={connectingEtsy}
-                className="text-xs px-3 py-1.5 bg-[#7F77DD]/10 hover:bg-[#7F77DD]/20 border border-[#7F77DD]/20 text-[#7F77DD] rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
-              >
-                {connectingEtsy ? (
-                  <span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
-                ) : null}
-                Connect Etsy Shop
-              </button>
-            )}
+            <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest">Connected Stores</p>
+            <button
+              onClick={connectStore}
+              disabled={connectingStore}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-[#7F77DD]/10 hover:bg-[#7F77DD]/20 border border-[#7F77DD]/20 text-[#7F77DD] rounded-lg transition-colors disabled:opacity-50"
+            >
+              {connectingStore
+                ? <span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                : <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+              }
+              Add store
+            </button>
           </div>
-          {!userData?.etsyConnected && (
-            <p className="text-xs text-white/30 leading-relaxed">
-              Connect your Etsy shop to enable private endpoints — create listings, manage orders, upload images, and more.
-            </p>
-          )}
-          {userData?.etsyConnected && userData.etsyShopId && (
-            <p className="text-xs text-white/30 font-mono">Shop ID: {userData.etsyShopId}</p>
+
+          {loadingStores ? (
+            <div className="flex justify-center py-4">
+              <span className="w-4 h-4 border-2 border-[#7F77DD] border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : stores.length === 0 ? (
+            <div className="text-center py-4">
+              <p className="text-xs text-white/30 mb-1">No stores connected yet</p>
+              <p className="text-xs text-white/20">Connect your Etsy shops to enable private endpoints</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {stores.map(store => (
+                <div key={store.shopId} className="flex items-center justify-between px-3 py-2.5 bg-white/3 border border-white/6 rounded-xl">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                    <div>
+                      <p className="text-sm text-white/80 font-medium">{store.shopName}</p>
+                      <p className="text-[10px] font-mono text-white/30">shop_id: {store.shopId}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => disconnectStore(store.shopId, store.shopName)}
+                    className="text-xs text-white/25 hover:text-red-400 transition-colors px-2 py-1"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
@@ -557,34 +589,6 @@ function DashboardContent() {
                     </button>
                   )}
                 </div>
-              </div>
-
-              <div className="h-px bg-white/6" />
-
-              {/* Etsy connection */}
-              <div>
-                <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3">Etsy Shop</p>
-                {userData?.etsyConnected ? (
-                  <div className="flex items-center justify-between bg-white/3 border border-white/6 rounded-xl p-3">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                      <span className="text-sm text-white/70">{userData.etsyShopName ?? "Connected"}</span>
-                    </div>
-                    <button
-                      onClick={() => { setProfileOpen(false); disconnectEtsy(); }}
-                      className="text-xs text-red-400 hover:text-red-300 transition-colors"
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => { setProfileOpen(false); connectEtsy(); }}
-                    className="w-full py-2 text-xs font-medium bg-white/4 hover:bg-white/8 border border-white/8 text-white/60 hover:text-white rounded-lg transition-colors"
-                  >
-                    Connect Etsy Shop
-                  </button>
-                )}
               </div>
 
               <div className="h-px bg-white/6" />

@@ -620,9 +620,9 @@ export default function DocsPage() {
     const main = document.getElementById("doc-main");
     if (!main) return;
 
+    const mainEl = main; // capture for closure — TypeScript narrowing
     function onScroll() {
-      if (!main) return;
-      const scrollTop = main.scrollTop + 120; // offset for header
+      const scrollTop = mainEl.scrollTop + 120; // offset for header
       let current = ALL_IDS[0];
 
       for (const id of ALL_IDS) {
@@ -634,9 +634,9 @@ export default function DocsPage() {
       setActive(current);
     }
 
-    main.addEventListener("scroll", onScroll, { passive: true });
-    onScroll(); // run once on mount
-    return () => main.removeEventListener("scroll", onScroll);
+    mainEl.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => mainEl.removeEventListener("scroll", onScroll);
   }, []);
 
   // Auto-scroll sidebar to keep active item visible
