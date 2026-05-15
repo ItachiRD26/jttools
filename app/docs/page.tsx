@@ -25,16 +25,32 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    label: "Listing Builder",
+    items: [
+      { id: "listing-builder", title: "Overview"          },
+      { id: "lb-create",       title: "Create Listing", count: 1 },
+      { id: "lb-jobs",         title: "Job Poll",       count: 1 },
+    ],
+  },
+  {
+    label: "Stores",
+    items: [
+      { id: "stores-list",      title: "List Stores",        count: 1 },
+      { id: "stores-sync",      title: "Sync",               count: 1 },
+      { id: "stores-live",      title: "Live Profiles",      count: 4 },
+    ],
+  },
+  {
     label: "Etsy Marketplace",
     items: [
       { id: "search",      title: "Search",             count: 1  },
-      { id: "listings",    title: "Listings",           count: 11 },
+      { id: "listings",    title: "Listings",           count: 12 },
       { id: "shops",       title: "Shops",              count: 8  },
       { id: "store-mgmt",  title: "Store Management",   count: 5  },
       { id: "images",      title: "Images & Media",     count: 9  },
       { id: "properties",  title: "Listing Properties", count: 4  },
       { id: "shipping",    title: "Shipping",           count: 7  },
-      { id: "categories",  title: "Categories",         count: 4  },
+      { id: "categories",  title: "Categories",         count: 5  },
       { id: "users",       title: "User",               count: 3  },
       { id: "policies",    title: "Shop Policies",      count: 14 },
     ],
@@ -114,6 +130,10 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
     { method: "GET",    path: "/listings/shipping",   description: "Get shipping info for a listing.",
       params: [{ name:"listing_id",type:"string",required:true,description:"Etsy listing ID" }],
       example: `curl "https://jeterdev.tools/api/v1/listings/shipping?listing_id=1234567890" -H "x-api-key: jt_YOUR_KEY"` },
+    { method: "GET",    path: "/listings/batch",      description: "Fetch up to 100 listings by ID in a single request.",
+      params: [{ name:"listing_ids",type:"string",required:true,description:"Comma-separated listing IDs (max 100)" }],
+      example: `curl "https://jeterdev.tools/api/v1/listings/batch?listing_ids=1234567890,9876543210,1122334455" -H "x-api-key: jt_YOUR_KEY"`,
+      response: `{"count":3,"results":[{"listing_id":1234567890,"title":"Handmade Ceramic Mug",...},{"listing_id":9876543210,...}]}` },
   ],
 
   shops: [
@@ -246,6 +266,10 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
     { method: "GET", path: "/categories/children",   description: "Get child nodes of a category.",
       params: [{ name:"taxonomy_id",type:"string",required:true,description:"Parent taxonomy node ID" }],
       example: `curl "https://jeterdev.tools/api/v1/categories/children?taxonomy_id=1" -H "x-api-key: jt_YOUR_KEY"` },
+    { method: "GET", path: "/categories/{id}/listing-schema", description: "Full schema for a taxonomy — required fields, optional fields, category attributes with possible values, and variation properties. Cache this response.", plan: "Pro+",
+      params: [{ name:"id",type:"string",required:true,description:"Etsy taxonomy node ID" }],
+      example: `curl "https://jeterdev.tools/api/v1/categories/482/listing-schema" -H "x-api-key: jt_YOUR_KEY"`,
+      response: `{"taxonomy_id":482,"required_fields":["title","description","price","quantity","taxonomy_id","listing_type","who_made","when_made"],"optional_fields":["tags","materials","sku","styles","processing_min","processing_max"],"category_attributes":[{"property_id":200,"name":"Primary color","required":false,"possible_values":[{"value_id":1,"name":"Black"},{"value_id":2,"name":"White"}],"scales":[]}],"variation_properties":[{"property_id":200,"name":"Primary color","scales":[]},{"property_id":62809790533,"name":"Size","scales":[{"scale_id":17,"display_name":"US","description":"US sizing"}]}]}` },
   ],
 
   users: [
@@ -307,6 +331,12 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
 };
 
 const SECTION_DESC: Record<string, string> = {
+  "listing-builder": "Create Etsy listings with a single atomic API call. Handles multi-shop, variations, images, category attributes, and personalization.",
+  "lb-create":       "POST /listings/create — the core endpoint. Accepts a single unified payload and handles all Etsy API orchestration.",
+  "lb-jobs":         "Poll a listing creation job by job_id. Jobs are retained for 24 hours.",
+  "stores-list":     "List all Etsy shops connected to your API key.",
+  "stores-sync":     "One-shot full shop data refresh — returns shipping profiles, return policies, processing profiles, sections, and partners in one call.",
+  "stores-live":     "Four endpoints that always hit Etsy fresh — no cache. Use before listing creation to get current profile IDs.",
   search:      "Full-text search across Etsy's active marketplace — 35M+ listings.",
   listings:    "Read, create, update, and delete Etsy listings. Write endpoints require Pro plan and store connection.",
   shops:       "Shop info, listings, sections, reviews, orders, and transactions.",
@@ -610,6 +640,272 @@ function EndpointSection({ id }: { id: string }) {
   );
 }
 
+// ─── Listing Builder sections ─────────────────
+
+function ListingBuilderOverview() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Listing Builder</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-white mb-3">Overview</h1>
+        <p className="text-sm text-white/50 leading-relaxed">
+          Create Etsy listings with a single atomic API call. Pass your full payload — title, images, variations, category attributes, personalization — and the bridge handles all Etsy API orchestration internally.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {([
+          ["draft",   "Saves payload internally. Zero Etsy calls. Returns instantly.", "border-white/8"],
+          ["publish", "Creates listing on Etsy as a draft. Uploads images and sets inventory. Returns listing_id.", "border-blue-500/20"],
+          ["active",  "Same as publish + activates on Etsy. Costs $0.20 USD per listing per shop.", "border-[#7F77DD]/20"],
+        ] as [string,string,string][]).map(([state, desc, border]) => (
+          <div key={state} className={`border rounded-xl p-4 bg-white/3 ${border}`}>
+            <div className="text-xs font-mono text-white/50 uppercase mb-2">state=&quot;{state}&quot;</div>
+            <p className="text-xs text-white/40 leading-relaxed">{desc}</p>
+          </div>
+        ))}
+      </div>
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Recommended flow</p>
+        <div className="space-y-2">
+          {([
+            ["1", "GET /stores",                        "Confirm connected shops and get their shop_ids"],
+            ["2", "POST /stores/{shopId}/sync",          "Get shipping profiles, return policies, processing profiles, and sections in one call"],
+            ["3", "GET /categories/{id}/listing-schema", "Discover required attributes and variation properties for your category"],
+            ["4", "POST /listings/create",               "Submit with state=\"draft\" first, then re-submit with state=\"publish\" or \"active\""],
+            ["5", "GET /listings/create/{job_id}",       "Poll for results — available for 24 hours"],
+          ] as [string,string,string][]).map(([n, ep, desc]) => (
+            <div key={n} className="flex items-start gap-4 p-3 border border-white/6 rounded-xl">
+              <span className="text-sm font-mono font-bold text-[#7F77DD] shrink-0 mt-0.5">{n}</span>
+              <div>
+                <p className="text-sm font-mono text-white/70">{ep}</p>
+                <p className="text-xs text-white/35 mt-0.5">{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <InfoBox type="warn">
+        <strong>state=&quot;active&quot;</strong> costs $0.20 USD per listing per shop — this is Etsy&apos;s listing fee. Always use state=&quot;draft&quot; first to verify before activating.
+      </InfoBox>
+    </div>
+  );
+}
+
+function ListingCreate() {
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Listing Builder</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-white mb-2">Create Listing</h1>
+        <p className="text-sm text-white/40 mb-2 font-mono">POST /api/v1/listings/create</p>
+        <p className="text-sm text-white/50 leading-relaxed">Single atomic call to create a listing across one or more shops.</p>
+      </div>
+      <InfoBox type="warn">Pro plan required.</InfoBox>
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Request body</p>
+        <CodeBlock code={`{
+  "state": "draft",
+  "shops": [{
+    "shop_id": 61004439,
+    "shipping_profile_id": 289094606827,
+    "return_policy_id":    1396555302092,
+    "processing_profile_id": 1456101932490,
+    "shop_section_id":     55308357,
+    "price": 34.99
+  }],
+  "listing": {
+    "title": "Vintage Band Tee", "description": "Premium cotton...",
+    "listing_type": "physical", "taxonomy_id": 482,
+    "price": 29.99, "quantity": 100,
+    "who_made": "i_did", "when_made": "2020_2026",
+    "tags": ["vintage tee", "band shirt"],
+    "processing_min": 1, "processing_max": 3
+  },
+  "images": [
+    { "url": "https://example.com/black-tee.jpg", "rank": 1 },
+    { "url": "https://example.com/white-tee.jpg", "rank": 2 }
+  ],
+  "personalization": {
+    "enabled": true, "is_required": false,
+    "instructions": "Enter name (max 15 chars)", "max_chars": 15
+  },
+  "category_attributes": {
+    "200":          { "value_ids": [1],    "values": ["Black"] },
+    "325502675244": { "value_ids": [2668], "values": ["Short sleeve"] }
+  },
+  "variations": {
+    "properties": [
+      { "property_id": 200,         "name": "Color", "values": ["Black","White"] },
+      { "property_id": 62809790533, "name": "Size", "scale_id": 17, "values": ["S","M","L"] }
+    ],
+    "offerings": [
+      { "color": "Black", "size": "S", "price": 29.99, "quantity": 20, "sku": "BLK-S" },
+      { "color": "Black", "size": "L", "price": 34.99, "quantity": 15, "sku": "BLK-L" },
+      { "color": "White", "size": "M", "price": 29.99, "quantity": 25, "sku": "WHT-M" }
+    ],
+    "variation_images": { "property": "color", "mapping": { "Black": 0, "White": 1 } }
+  }
+}`} lang="json" />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Draft response</p>
+          <CodeBlock code={`{
+  "listing_pk":    1234567,
+  "job_id":        "jt_aBcDeFgH...",
+  "status":        "draft",
+  "dashboard_url": "/dashboard#drafts/jt_..."
+}`} lang="json" />
+        </div>
+        <div>
+          <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Publish/Active response</p>
+          <CodeBlock code={`{
+  "job_id":      "jt_aBcDeFgH...",
+  "listing_pk":  1234567,
+  "status":      "completed",
+  "shops_count": 1,
+  "poll_url":    "/api/v1/listings/create/jt_...",
+  "results": [{
+    "shop_id":    "61004439",
+    "status":     "ok",
+    "listing_id": 4501295417,
+    "listing_url":"https://www.etsy.com/listing/4501295417",
+    "currency_code": "USD", "price": 29.99,
+    "images": [{"listing_image_id":5523110099001,"url_fullxfull":"...","rank":1}],
+    "videos": [], "activated": false,
+    "activation_cost_usd": 0, "warnings": []
+  }]
+}`} lang="json" />
+        </div>
+      </div>
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Validation error (400)</p>
+        <CodeBlock code={`{
+  "error": {
+    "code": "VALIDATION_FAILED", "status": 400,
+    "message": "Request validation failed.",
+    "fields": {
+      "listing.title": "Title is required",
+      "shops[0].shipping_profile_id": "Required for physical listings"
+    }
+  }
+}`} lang="json" />
+      </div>
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Shop not connected (403)</p>
+        <CodeBlock code={`{
+  "error": {
+    "code": "STORE_NOT_OWNED", "status": 403,
+    "message": "The following shop IDs are not connected: 61004439",
+    "hint": "Connect shops at jeterdev.tools/dashboard."
+  }
+}`} lang="json" />
+      </div>
+    </div>
+  );
+}
+
+function ListingJobPoll() {
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Listing Builder</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-white mb-2">Job Poll</h1>
+        <p className="text-sm text-white/40 mb-2 font-mono">GET /api/v1/listings/create/{"{job_id}"}</p>
+        <p className="text-sm text-white/50 leading-relaxed">Retrieve a listing creation job result. Jobs are retained for 24 hours — useful for retry logic or restoring queue state after a page reload.</p>
+      </div>
+      <CodeBlock code={`curl "https://jeterdev.tools/api/v1/listings/create/jt_aBcDeFgHiJkL..." \\
+  -H "x-api-key: jt_YOUR_KEY"`} />
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Response — same shape as create</p>
+        <CodeBlock code={`{ "job_id": "jt_...", "listing_pk": 1234567, "status": "completed", "results": [...] }`} lang="json" />
+      </div>
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Job expired or not found</p>
+        <CodeBlock code={`{ "error": { "code": "JOB_NOT_FOUND", "status": 404, "message": "Job 'jt_...' not found. Jobs expire after 24 hours." } }`} lang="json" />
+      </div>
+    </div>
+  );
+}
+
+// ─── Stores sections ──────────────────────────
+
+function StoresList() {
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Stores</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-white mb-2">List Stores</h1>
+        <p className="text-sm text-white/40 mb-2 font-mono">GET /api/v1/stores</p>
+        <p className="text-sm text-white/50 leading-relaxed">Returns all Etsy shops connected to your API key with their <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">shop_id</code>, connection status, and token validity.</p>
+      </div>
+      <CodeBlock code={`curl "https://jeterdev.tools/api/v1/stores" -H "x-api-key: jt_YOUR_KEY"`} />
+      <CodeBlock code={`{
+  "count": 2,
+  "stores": [
+    { "shop_id": "61004439", "shop_name": "MyCeramicsShop", "is_connected": true, "token_valid": true, "connected_at": "2026-05-09T12:00:00.000Z" },
+    { "shop_id": "72005550", "shop_name": "MyVintageShop",  "is_connected": true, "token_valid": true, "connected_at": "2026-05-10T08:30:00.000Z" }
+  ]
+}`} lang="json" />
+    </div>
+  );
+}
+
+function StoresSync() {
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Stores</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-white mb-2">Sync</h1>
+        <p className="text-sm text-white/40 mb-2 font-mono">POST /api/v1/stores/{"{shopId}"}/sync</p>
+        <p className="text-sm text-white/50 leading-relaxed">One-shot full shop data refresh. Returns shipping profiles, return policies, processing profiles, shop sections, and production partners in a single response.</p>
+      </div>
+      <InfoBox>Always hits Etsy fresh — no cache. Use this before listing creation to get all required IDs.</InfoBox>
+      <CodeBlock code={`curl -X POST "https://jeterdev.tools/api/v1/stores/61004439/sync" -H "x-api-key: jt_YOUR_KEY"`} />
+      <CodeBlock code={`{
+  "shop_id": "61004439", "synced_at": "2026-05-09T14:22:00.000Z",
+  "shipping_profiles":   [{ "shipping_profile_id": 289094606827, "title": "US Standard" }],
+  "return_policies":     [{ "return_policy_id": 1396555302092, "accepts_returns": true }],
+  "processing_profiles": [{ "production_partner_profile_id": 1456101932490, "title": "1-3 days" }],
+  "shop_sections":       [{ "shop_section_id": 55308357, "title": "Mugs & Cups" }],
+  "production_partners": []
+}`} lang="json" />
+    </div>
+  );
+}
+
+function StoresLive() {
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Stores</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-white mb-2">Live Profiles</h1>
+        <p className="text-sm text-white/50 leading-relaxed">Four endpoints that always hit Etsy fresh — never cached. Use them individually when you only need one data type. For all four at once use <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">POST /stores/{"{shopId}"}/sync</code>.</p>
+      </div>
+      <InfoBox>All /live endpoints require the shop to be connected and count against your daily rate limit.</InfoBox>
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Shared response shape</p>
+        <CodeBlock code={`{ "shop_id": "61004439", "fetched_at": "2026-05-09T14:22:00.000Z", "count": 3, "<profile_type>": [...] }`} lang="json" />
+      </div>
+      {([
+        ["/stores/{shopId}/shipping-profiles/live", "shipping_profiles",   "Shipping profiles → shipping_profile_id"],
+        ["/stores/{shopId}/return-policies/live",   "return_policies",     "Return policies → return_policy_id"],
+        ["/stores/{shopId}/processing-profiles/live","processing_profiles","Processing profiles → processing_profile_id"],
+        ["/stores/{shopId}/shop-sections/live",     "shop_sections",       "Shop sections → shop_section_id"],
+      ] as [string,string,string][]).map(([path, key, desc]) => (
+        <div key={path} className="border border-white/6 rounded-xl p-4">
+          <div className="flex items-center gap-3 mb-2">
+            <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">GET</span>
+            <span className="font-mono text-sm text-white/70">{path}</span>
+          </div>
+          <p className="text-xs text-white/40 mb-3">{desc}</p>
+          <CodeBlock code={`curl "https://jeterdev.tools/api/v1/${path.replace("{shopId}","61004439")}" -H "x-api-key: jt_YOUR_KEY"`} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Main ─────────────────────────────────────
 export default function DocsPage() {
   const [active, setActive] = useState("introduction");
@@ -670,6 +966,12 @@ export default function DocsPage() {
       case "rate-limits":      return <RateLimits />;
       case "store-connection": return <StoreConnection />;
       case "errors":           return <Errors />;
+      case "listing-builder":  return <ListingBuilderOverview />;
+      case "lb-create":        return <ListingCreate />;
+      case "lb-jobs":          return <ListingJobPoll />;
+      case "stores-list":      return <StoresList />;
+      case "stores-sync":      return <StoresSync />;
+      case "stores-live":      return <StoresLive />;
       default:                 return <EndpointSection id={id} />;
     }
   }

@@ -1,0 +1,576 @@
+// LOCATION: lib/listing-builder.ts
+// Orchestrates listing creation: draft (Firestore only) | publish | active (Etsy API)
+// Handles multi-shop, variations, category attributes, images, personalization
+
+import { getDb } from "./firebase-admin";
+import { getValidAccessToken } from "./etsy-oauth";
+import { FieldValue } from "firebase-admin/firestore";
+
+const ETSY_BASE = "https://openapi.etsy.com/v3";
+const API_KEY   = () => `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface ShopConfig {
+  shop_id:               number;
+  shipping_profile_id?:  number;
+  return_policy_id?:     number;
+  processing_profile_id?: number;
+  shop_section_id?:      number;
+  production_partner_ids?: number[];
+  price?:                number; // per-shop price override
+}
+
+export interface ListingData {
+  title:            string;
+  description:      string;
+  listing_type?:    "physical" | "download" | "both";
+  taxonomy_id:      number;
+  price:            number;
+  quantity:         number;
+  who_made:         "i_did" | "someone_else" | "collective";
+  when_made:        string;
+  tags?:            string[];
+  materials?:       string[];
+  styles?:          string[];
+  sku?:             string;
+  is_supply?:       boolean;
+  is_customizable?: boolean;
+  is_taxable?:      boolean;
+  should_auto_renew?: boolean;
+  item_weight?:     number;
+  item_weight_unit?: string;
+  item_length?:     number;
+  item_width?:      number;
+  item_height?:     number;
+  item_dimensions_unit?: string;
+  processing_min?:  number;
+  processing_max?:  number;
+}
+
+export interface ImageItem { url: string; rank: number }
+export interface DigitalFile { url: string; name?: string }
+export interface VideoItem  { url: string }
+
+export interface CategoryAttribute {
+  value_ids: number[];
+  values:    string[];
+  scale_id?: number;
+}
+
+export interface VariationProperty {
+  property_id: number;
+  name:        string;
+  scale_id?:   number;
+  values:      string[];
+}
+
+export interface VariationOffering {
+  [key: string]: string | number | boolean | undefined;
+  price:    number;
+  quantity: number;
+  sku?:     string;
+  enabled?: boolean;
+  processing_profile_id?: number;
+}
+
+export interface VariationsConfig {
+  properties:       VariationProperty[];
+  offerings:        VariationOffering[];
+  variation_images?: {
+    property: string;
+    mapping:  Record<string, number>;
+  };
+}
+
+export interface PersonalizationConfig {
+  enabled:       boolean;
+  is_required?:  boolean;
+  instructions?: string;
+  max_chars?:    number;
+}
+
+export interface CreateListingBody {
+  state:               "draft" | "publish" | "active";
+  shops:               ShopConfig[];
+  listing:             ListingData;
+  images?:             ImageItem[];
+  digital_files?:      DigitalFile[];
+  videos?:             VideoItem[];
+  personalization?:    PersonalizationConfig;
+  category_attributes?: Record<string, CategoryAttribute>;
+  variations?:         VariationsConfig;
+}
+
+export interface ShopResult {
+  shop_id:             string;
+  status:              "ok" | "error";
+  listing_id?:         number;
+  listing_url?:        string;
+  currency_code?:      string;
+  price?:              number;
+  images?:             { listing_image_id: number; url_fullxfull: string; rank: number }[];
+  videos?:             unknown[];
+  activated?:          boolean;
+  activation_cost_usd?: number;
+  warnings?:           { code: string; fields: string; reason: string }[];
+  error?:              string;
+}
+
+// ─── Validation ───────────────────────────────────────────────────────────────
+
+export interface ValidationError {
+  field: string;
+  reason: string;
+}
+
+export function validatePayload(body: CreateListingBody): ValidationError[] {
+  const errors: ValidationError[] = [];
+
+  if (!body.state || !["draft", "publish", "active"].includes(body.state)) {
+    errors.push({ field: "state", reason: "Must be 'draft', 'publish', or 'active'" });
+  }
+  if (!body.shops?.length) {
+    errors.push({ field: "shops", reason: "At least one shop is required" });
+  }
+  if (!body.listing?.title) errors.push({ field: "listing.title", reason: "Title is required" });
+  if (!body.listing?.description) errors.push({ field: "listing.description", reason: "Description is required" });
+  if (!body.listing?.taxonomy_id) errors.push({ field: "listing.taxonomy_id", reason: "taxonomy_id is required" });
+  if (!body.listing?.price && body.listing?.price !== 0) errors.push({ field: "listing.price", reason: "Price is required" });
+  if (!body.listing?.quantity) errors.push({ field: "listing.quantity", reason: "Quantity is required" });
+  if (!body.listing?.who_made) errors.push({ field: "listing.who_made", reason: "who_made is required" });
+  if (!body.listing?.when_made) errors.push({ field: "listing.when_made", reason: "when_made is required" });
+  if (body.listing?.tags && body.listing.tags.length > 13) {
+    errors.push({ field: "listing.tags", reason: "Maximum 13 tags allowed" });
+  }
+  if (body.listing?.title && body.listing.title.length > 140) {
+    errors.push({ field: "listing.title", reason: "Title must be 140 characters or less" });
+  }
+  if (body.variations?.properties && body.variations.properties.length > 2) {
+    errors.push({ field: "variations.properties", reason: "Maximum 2 variation properties allowed" });
+  }
+
+  // Physical listing needs shipping + return policy
+  if (!body.listing?.listing_type || body.listing.listing_type === "physical") {
+    body.shops?.forEach((shop, i) => {
+      if (!shop.shipping_profile_id) {
+        errors.push({ field: `shops[${i}].shipping_profile_id`, reason: "Required for physical listings" });
+      }
+      if (!shop.return_policy_id) {
+        errors.push({ field: `shops[${i}].return_policy_id`, reason: "Required for physical listings" });
+      }
+    });
+  }
+
+  return errors;
+}
+
+// ─── Job ID generator ─────────────────────────────────────────────────────────
+
+function generateJobId(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  return "jt_" + Array.from({ length: 22 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
+function generateListingPk(): number {
+  return Math.floor(Date.now() / 1000) % 10000000 + Math.floor(Math.random() * 1000);
+}
+
+// ─── Draft creation ───────────────────────────────────────────────────────────
+
+async function saveDraft(userId: string, apiKey: string, body: CreateListingBody) {
+  const db        = getDb();
+  const listingPk = generateListingPk();
+  const jobId     = generateJobId();
+
+  await db.collection("listingJobs").doc(jobId).set({
+    userId, apiKey, listingPk,
+    state: "draft",
+    payload: body,
+    createdAt: FieldValue.serverTimestamp(),
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+  });
+
+  return {
+    listing_pk:    listingPk,
+    job_id:        jobId,
+    status:        "draft" as const,
+    dashboard_url: `/dashboard#drafts/${jobId}`,
+  };
+}
+
+// ─── Etsy API helpers ─────────────────────────────────────────────────────────
+
+async function etsyRequest(
+  method: string,
+  path: string,
+  accessToken: string,
+  body?: unknown
+): Promise<Response> {
+  const headers: Record<string, string> = {
+    "x-api-key":     API_KEY(),
+    "Authorization": `Bearer ${accessToken}`,
+    "Accept":        "application/json",
+  };
+  if (body && !(body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
+  return fetch(`${ETSY_BASE}${path}`, {
+    method,
+    headers,
+    body: body ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined,
+  });
+}
+
+// ─── Build Etsy listing payload from unified format ───────────────────────────
+
+function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): Record<string, unknown> {
+  const price = shopConfig.price ?? listing.price;
+
+  const payload: Record<string, unknown> = {
+    title:            listing.title,
+    description:      listing.description,
+    price: {
+      amount:        Math.round(price * 100),
+      divisor:       100,
+      currency_code: "USD",
+    },
+    quantity:          listing.quantity,
+    who_made:          listing.who_made,
+    when_made:         listing.when_made,
+    taxonomy_id:       listing.taxonomy_id,
+    listing_type:      listing.listing_type ?? "physical",
+    tags:              listing.tags ?? [],
+    materials:         listing.materials ?? [],
+    styles:            listing.styles ?? [],
+    is_supply:         listing.is_supply ?? false,
+    is_customizable:   listing.is_customizable ?? false,
+    is_taxable:        listing.is_taxable ?? true,
+    should_auto_renew: listing.should_auto_renew ?? true,
+  };
+
+  if (shopConfig.shipping_profile_id) payload.shipping_profile_id = shopConfig.shipping_profile_id;
+  if (shopConfig.return_policy_id)    payload.return_policy_id    = shopConfig.return_policy_id;
+  if (shopConfig.shop_section_id)     payload.shop_section_id     = shopConfig.shop_section_id;
+  if (listing.sku)                    payload.sku                 = listing.sku;
+  if (listing.item_weight)            payload.item_weight         = listing.item_weight;
+  if (listing.item_weight_unit)       payload.item_weight_unit    = listing.item_weight_unit;
+  if (listing.item_length)            payload.item_length         = listing.item_length;
+  if (listing.item_width)             payload.item_width          = listing.item_width;
+  if (listing.item_height)            payload.item_height         = listing.item_height;
+  if (listing.item_dimensions_unit)   payload.item_dimensions_unit = listing.item_dimensions_unit;
+  if (listing.processing_min)         payload.processing_min      = listing.processing_min;
+  if (listing.processing_max)         payload.processing_max      = listing.processing_max;
+  if (shopConfig.production_partner_ids?.length) {
+    payload.production_partner_ids = shopConfig.production_partner_ids;
+  }
+
+  return payload;
+}
+
+// ─── Build Etsy inventory from variations ────────────────────────────────────
+
+function buildEtsyInventory(variations: VariationsConfig, basePrice: number): Record<string, unknown> {
+  const { properties, offerings } = variations;
+
+  // Build property name → property info lookup
+  const propByName: Record<string, VariationProperty> = {};
+  properties.forEach(p => { propByName[p.name.toLowerCase()] = p; });
+
+  // Detect what varies
+  const prices    = offerings.map(o => o.price as number);
+  const allSamePrice = prices.every(p => p === prices[0]);
+  const skus      = offerings.map(o => o.sku as string).filter(Boolean);
+  const allUniqueSkus = skus.length === offerings.length && new Set(skus).size === offerings.length;
+
+  // Build products
+  const products = offerings.map(offering => {
+    const propertyValues = properties.map(prop => {
+      const key   = prop.name.toLowerCase();
+      const value = offering[key] as string;
+      return {
+        property_id:   prop.property_id,
+        value_ids:     [0], // Etsy assigns
+        values:        [value],
+        property_name: prop.name,
+        ...(prop.scale_id ? { scale_id: prop.scale_id } : {}),
+      };
+    });
+
+    const offeringPrice = (offering.price as number) ?? basePrice;
+
+    return {
+      sku:        (offering.sku as string) ?? "",
+      is_deleted: false,
+      offerings: [{
+        price: {
+          amount:        Math.round(offeringPrice * 100),
+          divisor:       100,
+          currency_code: "USD",
+        },
+        quantity:   (offering.quantity as number) ?? 1,
+        is_enabled: (offering.enabled as boolean) !== false,
+      }],
+      property_values: propertyValues,
+    };
+  });
+
+  // price_on_property: which property causes price variation
+  const priceOnProp  = allSamePrice  ? [] : [properties[0]?.property_id].filter(Boolean);
+  const skuOnProp    = allUniqueSkus ? [properties[0]?.property_id].filter(Boolean) : [];
+
+  return { products, price_on_property: priceOnProp, quantity_on_property: [], sku_on_property: skuOnProp };
+}
+
+// ─── Upload image to Etsy (download URL → re-upload) ─────────────────────────
+
+async function uploadImageToListing(
+  shopId: number, listingId: number,
+  imageUrl: string, rank: number,
+  accessToken: string
+): Promise<{ listing_image_id: number; url_fullxfull: string; rank: number } | null> {
+  try {
+    const imgResp = await fetch(imageUrl);
+    if (!imgResp.ok) throw new Error(`Failed to fetch image: ${imageUrl}`);
+
+    const buffer      = Buffer.from(await imgResp.arrayBuffer());
+    const contentType = imgResp.headers.get("content-type") ?? "image/jpeg";
+    const ext         = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : "jpg";
+
+    const fd = new FormData();
+    fd.append("image", new Blob([buffer], { type: contentType }), `image.${ext}`);
+    fd.append("rank",  String(rank));
+
+    const res = await etsyRequest(
+      "POST",
+      `/application/shops/${shopId}/listings/${listingId}/images`,
+      accessToken,
+      fd
+    );
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      listing_image_id: data.listing_image_id,
+      url_fullxfull:    data.url_fullxfull ?? "",
+      rank:             data.rank ?? rank,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Set category attributes ──────────────────────────────────────────────────
+
+async function setCategoryAttributes(
+  shopId: number, listingId: number,
+  attrs: Record<string, CategoryAttribute>,
+  accessToken: string
+) {
+  await Promise.allSettled(
+    Object.entries(attrs).map(([propertyId, attr]) =>
+      etsyRequest(
+        "PUT",
+        `/application/shops/${shopId}/listings/${listingId}/properties/${propertyId}`,
+        accessToken,
+        {
+          value_ids: attr.value_ids,
+          values:    attr.values,
+          ...(attr.scale_id ? { scale_id: attr.scale_id } : {}),
+        }
+      )
+    )
+  );
+}
+
+// ─── Set personalization ──────────────────────────────────────────────────────
+
+async function setPersonalization(
+  shopId: number, listingId: number,
+  personalization: PersonalizationConfig,
+  accessToken: string
+) {
+  await etsyRequest(
+    "PUT",
+    `/application/shops/${shopId}/listings/${listingId}/listing_personalization`,
+    accessToken,
+    {
+      is_personalizable:     personalization.enabled,
+      is_customizable:       personalization.enabled,
+      personalization_instructions: personalization.instructions ?? "",
+      personalization_char_count_max: personalization.max_chars ?? 256,
+      personalization_is_required: personalization.is_required ?? false,
+    }
+  );
+}
+
+// ─── Publish to a single shop ─────────────────────────────────────────────────
+
+async function publishToShop(
+  userId: string,
+  shopConfig: ShopConfig,
+  body: CreateListingBody,
+  state: "publish" | "active"
+): Promise<ShopResult> {
+  const shopId = shopConfig.shop_id;
+
+  // Get OAuth token for this shop
+  let accessToken: string;
+  try {
+    accessToken = await getValidAccessToken(userId, String(shopId));
+  } catch {
+    return {
+      shop_id: String(shopId),
+      status:  "error",
+      error:   `Shop ${shopId} is not connected. Connect it at jeterdev.tools/dashboard.`,
+    };
+  }
+
+  // 1. Create the listing on Etsy
+  const etsyPayload = buildEtsyListingPayload(shopConfig, body.listing);
+  const createRes   = await etsyRequest(
+    "POST",
+    `/application/shops/${shopId}/listings`,
+    accessToken,
+    etsyPayload
+  );
+
+  if (!createRes.ok) {
+    const err = await createRes.json().catch(() => ({}));
+    return {
+      shop_id: String(shopId),
+      status:  "error",
+      error:   (err as { error?: string }).error ?? `Etsy listing creation failed (${createRes.status})`,
+    };
+  }
+
+  const created = await createRes.json();
+  const listingId: number = created.listing_id;
+
+  const warnings: { code: string; fields: string; reason: string }[] = [];
+  const uploadedImages: { listing_image_id: number; url_fullxfull: string; rank: number }[] = [];
+  const uploadedVideos: unknown[] = [];
+
+  // 2. Upload images
+  if (body.images?.length) {
+    for (const img of body.images) {
+      const uploaded = await uploadImageToListing(shopId, listingId, img.url, img.rank, accessToken);
+      if (uploaded) {
+        uploadedImages.push(uploaded);
+      } else {
+        warnings.push({ code: "IMAGE_UPLOAD_FAILED", fields: `images[${img.rank}].url`, reason: `Failed to upload image at rank ${img.rank}` });
+      }
+    }
+  }
+
+  // 3. Set inventory/variations
+  if (body.variations?.properties?.length) {
+    const inventory = buildEtsyInventory(body.variations, body.listing.price);
+    const invRes = await etsyRequest(
+      "PUT",
+      `/application/shops/${shopId}/listings/${listingId}/inventory`,
+      accessToken,
+      inventory
+    );
+    if (!invRes.ok) {
+      warnings.push({ code: "INVENTORY_SET_FAILED", fields: "variations", reason: "Failed to set inventory/variations" });
+    }
+  }
+
+  // 4. Set category attributes
+  if (body.category_attributes && Object.keys(body.category_attributes).length > 0) {
+    await setCategoryAttributes(shopId, listingId, body.category_attributes, accessToken);
+  }
+
+  // 5. Set personalization
+  if (body.personalization?.enabled) {
+    await setPersonalization(shopId, listingId, body.personalization, accessToken);
+  }
+
+  // 6. Activate if state="active"
+  let activated = false;
+  if (state === "active") {
+    const activateRes = await etsyRequest(
+      "PATCH",
+      `/application/shops/${shopId}/listings/${listingId}`,
+      accessToken,
+      { state: "active" }
+    );
+    activated = activateRes.ok;
+    if (!activateRes.ok) {
+      warnings.push({ code: "ACTIVATION_FAILED", fields: "state", reason: "Failed to activate listing on Etsy" });
+    }
+  }
+
+  const listingPrice = shopConfig.price ?? body.listing.price;
+
+  return {
+    shop_id:    String(shopId),
+    status:     "ok",
+    listing_id: listingId,
+    listing_url: `https://www.etsy.com/listing/${listingId}`,
+    currency_code: "USD",
+    price:      listingPrice,
+    images:     uploadedImages,
+    videos:     uploadedVideos,
+    activated,
+    activation_cost_usd: state === "active" ? 0.20 : 0,
+    warnings,
+  };
+}
+
+// ─── Main entry point ─────────────────────────────────────────────────────────
+
+export async function createListing(
+  userId: string,
+  apiKey: string,
+  body: CreateListingBody
+): Promise<Record<string, unknown>> {
+  const db = getDb();
+
+  // Draft — no Etsy calls
+  if (body.state === "draft") {
+    return saveDraft(userId, apiKey, body);
+  }
+
+  // Publish / Active — orchestrate per-shop
+  const listingPk = generateListingPk();
+  const jobId     = generateJobId();
+
+  const results = await Promise.allSettled(
+    body.shops.map(shop => publishToShop(userId, shop, body, body.state as "publish" | "active"))
+  );
+
+  const shopResults: ShopResult[] = results.map((r, i) => {
+    if (r.status === "fulfilled") return r.value;
+    return {
+      shop_id: String(body.shops[i].shop_id),
+      status:  "error" as const,
+      error:   r.reason?.message ?? "Unknown error",
+    };
+  });
+
+  const allFailed  = shopResults.every(r => r.status === "error");
+  const jobStatus  = allFailed ? "failed" : "completed";
+
+  const response: Record<string, unknown> = {
+    job_id:      jobId,
+    listing_pk:  listingPk,
+    status:      jobStatus,
+    shops_count: body.shops.length,
+    results:     shopResults,
+    poll_url:    `/api/v1/listings/create/${jobId}`,
+  };
+
+  // Store job in Firestore for poll endpoint (24h TTL)
+  await db.collection("listingJobs").doc(jobId).set({
+    userId, apiKey, listingPk,
+    state:     body.state,
+    status:    jobStatus,
+    response,
+    createdAt: FieldValue.serverTimestamp(),
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+  });
+
+  return response;
+}
