@@ -19,14 +19,7 @@ export const PLANS: Record<PlanId, Plan> = {
     name: "Free",
     dailyLimit: 100,
     price: 0,
-    allowedEndpoints: [
-      "listings/search",
-      "listings/get",
-      "listings/active",
-      "shops/get",
-      "categories/list",
-      "search/listings",
-    ],
+    allowedEndpoints: ["*"], // all endpoints open — testing mode
   },
 
   starter: {
