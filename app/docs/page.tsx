@@ -38,7 +38,7 @@ const NAV: NavGroup[] = [
     items: [
       { id: "stores-list",      title: "List Stores",        count: 1 },
       { id: "stores-sync",      title: "Sync",               count: 1 },
-      { id: "stores-live",      title: "Live Profiles",      count: 4 },
+      { id: "stores-live",      title: "Live Profiles",      count: 5 },
     ],
   },
   {
@@ -982,7 +982,7 @@ function StoresSync() {
   "return_policies":     [{ "return_policy_id": 1396555302092, "accepts_returns": true }],
   "processing_profiles": [{ "production_partner_profile_id": 1456101932490, "title": "1-3 days" }],
   "shop_sections":       [{ "shop_section_id": 55308357, "title": "Mugs & Cups" }],
-  "production_partners": []
+  "production_partners": []   // separate from processing_profiles
 }`} lang="json" />
     </div>
   );

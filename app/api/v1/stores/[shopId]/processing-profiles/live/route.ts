@@ -1,7 +1,12 @@
 // LOCATION: app/api/v1/stores/[shopId]/processing-profiles/live/route.ts
 // GET /api/v1/stores/{shopId}/processing-profiles/live
-// "Processing profiles" in Etsy = production partners (who makes the items)
-// Etsy v3: GET /application/shops/{shop_id}/production-partners
+//
+// Processing profiles = unique {processing_min, processing_max} combinations
+// used across active listings. Etsy has no standalone "processing profiles"
+// endpoint — these are derived by scanning active listings and deduplicating.
+//
+// NOTE: Production partners (external manufacturers) are a separate concept.
+// See GET /stores/{shopId}/production-partners/live for those.
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
@@ -35,9 +40,10 @@ export async function GET(
     );
   }
 
-  // Etsy v3: production partners are the "processing profiles" concept
+  // Fetch active listings to extract unique processing time combinations.
+  // Etsy has no standalone "processing profiles" endpoint — we derive them.
   const res = await fetch(
-    `${ETSY_BASE}/application/shops/${shopId}/production-partners`,
+    `${ETSY_BASE}/application/shops/${shopId}/listings/active?limit=100&fields=listing_id,processing_min,processing_max`,
     {
       headers: {
         "x-api-key":     API_KEY(),
@@ -56,24 +62,53 @@ export async function GET(
         error: {
           code:    "UPSTREAM_ERROR",
           status:  502,
-          message: `Etsy production partners fetch failed (${res.status}).`,
+          message: `Etsy listings fetch failed (${res.status}).`,
           details: errBody,
-          hint:    "Production partners (processing profiles) are optional in Etsy. If the shop has none configured, this may return empty.",
         },
       },
       { status: 502 }
     );
   }
 
-  const data       = await res.json();
-  const results    = data.results ?? data ?? [];
-  const fetched_at = new Date().toISOString();
+  const data     = await res.json();
+  const listings = data.results ?? [];
+
+  // Deduplicate processing time combinations
+  const seen = new Set<string>();
+  const profiles: {
+    processing_profile_id: string;
+    processing_min: number;
+    processing_max: number;
+    processing_days_display_label: string;
+  }[] = [];
+
+  for (const listing of listings) {
+    const min = listing.processing_min ?? 1;
+    const max = listing.processing_max ?? 3;
+    const key = `${min}-${max}`;
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      profiles.push({
+        // Synthetic ID — stable key for this min/max combination
+        processing_profile_id:         key,
+        processing_min:                 min,
+        processing_max:                 max,
+        processing_days_display_label:  min === max
+          ? `${min} business day${min === 1 ? "" : "s"}`
+          : `${min}–${max} business days`,
+      });
+    }
+  }
+
+  // Sort by processing_min
+  profiles.sort((a, b) => a.processing_min - b.processing_min);
 
   return NextResponse.json({
     shop_id:             shopId,
-    fetched_at,
-    count:               Array.isArray(results) ? results.length : 0,
-    processing_profiles: Array.isArray(results) ? results : [],
-    note:                "Processing profiles map to Etsy production partners. Shops without production partners return an empty array.",
+    fetched_at:          new Date().toISOString(),
+    count:               profiles.length,
+    processing_profiles: profiles,
+    note: "Derived from active listings. Use processing_min and processing_max when creating listings — Etsy does not have a standalone processing profiles endpoint.",
   });
 }
