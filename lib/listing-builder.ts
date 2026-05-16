@@ -3,6 +3,7 @@
 // Handles multi-shop, variations, category attributes, images, personalization
 
 import { getDb } from "./firebase-admin";
+import type { Firestore } from "firebase-admin/firestore";
 import { getValidAccessToken } from "./etsy-oauth";
 import { FieldValue } from "firebase-admin/firestore";
 
@@ -158,6 +159,19 @@ export function validatePayload(body: CreateListingBody): ValidationError[] {
       }
       if (!shop.return_policy_id) {
         errors.push({ field: `shops[${i}].return_policy_id`, reason: "Required for physical listings" });
+      }
+    });
+  }
+
+  // Images: warn if jt-upload:// URLs are referenced but no file exists
+  // (actual file validation happens at request time)
+  if (body.images) {
+    body.images.forEach((img, i) => {
+      if (!img.url) {
+        errors.push({ field: `images[${i}].url`, reason: "Image URL is required" });
+      }
+      if (!img.rank || img.rank < 1 || img.rank > 10) {
+        errors.push({ field: `images[${i}].rank`, reason: "Image rank must be between 1 and 10" });
       }
     });
   }
@@ -322,23 +336,70 @@ function buildEtsyInventory(variations: VariationsConfig, basePrice: number): Re
   return { products, price_on_property: priceOnProp, quantity_on_property: [], sku_on_property: skuOnProp };
 }
 
-// ─── Upload image to Etsy (download URL → re-upload) ─────────────────────────
+// ─── Resolve jt-upload:// URL → binary buffer ────────────────────────────────
+
+async function resolveUploadUrl(url: string, db: Firestore): Promise<{ buffer: Buffer; contentType: string; filename: string } | null> {
+  if (!url.startsWith("jt-upload://")) return null;
+
+  const uploadId = url.replace("jt-upload://", "");
+  const snap     = await db.collection("uploads").doc(uploadId).get();
+  if (!snap.exists) return null;
+
+  const data = snap.data()!;
+
+  // Check not expired
+  const expiresAt: Date = data.expiresAt?.toDate?.() ?? new Date(0);
+  if (new Date() > expiresAt) return null;
+
+  let buffer: Buffer;
+
+  if (data.isChunked) {
+    // Reassemble chunks
+    const chunks: Buffer[] = [];
+    for (let i = 0; i < data.chunks; i++) {
+      const chunkSnap = await db.collection("uploadChunks").doc(`${uploadId}_${i}`).get();
+      if (!chunkSnap.exists) return null;
+      chunks.push(Buffer.from(chunkSnap.data()!.data, "base64"));
+    }
+    buffer = Buffer.concat(chunks);
+  } else {
+    if (!data.data) return null;
+    buffer = Buffer.from(data.data, "base64");
+  }
+
+  return { buffer, contentType: data.contentType, filename: data.filename };
+}
+
+// ─── Upload image to Etsy (URL or jt-upload:// → re-upload) ─────────────────
 
 async function uploadImageToListing(
   shopId: number, listingId: number,
   imageUrl: string, rank: number,
-  accessToken: string
+  accessToken: string,
+  db?: Firestore
 ): Promise<{ listing_image_id: number; url_fullxfull: string; rank: number } | null> {
   try {
-    const imgResp = await fetch(imageUrl);
-    if (!imgResp.ok) throw new Error(`Failed to fetch image: ${imageUrl}`);
+    let buffer: Buffer;
+    let contentType: string;
 
-    const buffer      = Buffer.from(await imgResp.arrayBuffer());
-    const contentType = imgResp.headers.get("content-type") ?? "image/jpeg";
-    const ext         = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : "jpg";
+    if (imageUrl.startsWith("jt-upload://") && db) {
+      // Resolve from Firestore upload cache
+      const resolved = await resolveUploadUrl(imageUrl, db);
+      if (!resolved) throw new Error(`Upload file not found or expired: ${imageUrl}`);
+      buffer      = resolved.buffer;
+      contentType = resolved.contentType;
+    } else {
+      // Fetch from remote URL
+      const imgResp = await fetch(imageUrl);
+      if (!imgResp.ok) throw new Error(`Failed to fetch image: ${imageUrl}`);
+      buffer      = Buffer.from(await imgResp.arrayBuffer());
+      contentType = imgResp.headers.get("content-type") ?? "image/jpeg";
+    }
+
+    const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : "jpg";
 
     const fd = new FormData();
-    fd.append("image", new Blob([buffer], { type: contentType }), `image.${ext}`);
+    fd.append("image", new Blob([new Uint8Array(buffer)], { type: contentType }), `image.${ext}`);
     fd.append("rank",  String(rank));
 
     const res = await etsyRequest(
@@ -410,7 +471,8 @@ async function publishToShop(
   userId: string,
   shopConfig: ShopConfig,
   body: CreateListingBody,
-  state: "publish" | "active"
+  state: "publish" | "active",
+  db: Firestore
 ): Promise<ShopResult> {
   const shopId = shopConfig.shop_id;
 
@@ -454,7 +516,7 @@ async function publishToShop(
   // 2. Upload images
   if (body.images?.length) {
     for (const img of body.images) {
-      const uploaded = await uploadImageToListing(shopId, listingId, img.url, img.rank, accessToken);
+      const uploaded = await uploadImageToListing(shopId, listingId, img.url, img.rank, accessToken, db);
       if (uploaded) {
         uploadedImages.push(uploaded);
       } else {
@@ -526,7 +588,7 @@ export async function createListing(
   apiKey: string,
   body: CreateListingBody
 ): Promise<Record<string, unknown>> {
-  const db = getDb();
+  const db = getDb() as FirebaseFirestore.Firestore;
 
   // Draft — no Etsy calls
   if (body.state === "draft") {
@@ -538,7 +600,7 @@ export async function createListing(
   const jobId     = generateJobId();
 
   const results = await Promise.allSettled(
-    body.shops.map(shop => publishToShop(userId, shop, body, body.state as "publish" | "active"))
+    body.shops.map(shop => publishToShop(userId, shop, body, body.state as "publish" | "active", db))
   );
 
   const shopResults: ShopResult[] = results.map((r, i) => {
@@ -553,6 +615,8 @@ export async function createListing(
   const allFailed  = shopResults.every(r => r.status === "error");
   const jobStatus  = allFailed ? "failed" : "completed";
 
+  const activationCost = body.state === "active" ? body.shops.length * 0.20 : 0;
+
   const response: Record<string, unknown> = {
     job_id:      jobId,
     listing_pk:  listingPk,
@@ -560,6 +624,14 @@ export async function createListing(
     shops_count: body.shops.length,
     results:     shopResults,
     poll_url:    `/api/v1/listings/create/${jobId}`,
+    ...(body.state === "active" ? {
+      activation_cost_usd: activationCost,
+      warnings: [{
+        code:   "ACTIVATION_COST_WARNING",
+        fields: "state",
+        reason: `Activating ${body.shops.length} listing(s) costs $${activationCost.toFixed(2)} USD (Etsy listing fee).`,
+      }],
+    } : {}),
   };
 
   // Store job in Firestore for poll endpoint (24h TTL)

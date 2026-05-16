@@ -47,20 +47,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Verify all shops are connected (preflight)
-  if (body.state !== "draft") {
-    const db         = getDb();
-    const keySnap    = await db.collection("apiKeys").doc(apiKey!).get();
-    const userId     = keySnap.data()?.userId as string;
-    const notOwned: string[] = [];
+  // Get userId from API key
+  const db      = getDb();
+  const keySnap = await db.collection("apiKeys").doc(apiKey!).get();
+  const userId  = keySnap.data()?.userId as string;
 
+  if (body.state !== "draft") {
+    // ── Preflight: verify all shops connected ─────────────────────────────
+    const notOwned: string[] = [];
     for (const shop of body.shops) {
       const connSnap = await db
-        .collection("etsyConnections")
-        .doc(userId)
-        .collection("shops")
-        .doc(String(shop.shop_id))
-        .get();
+        .collection("etsyConnections").doc(userId)
+        .collection("shops").doc(String(shop.shop_id)).get();
       if (!connSnap.exists) notOwned.push(String(shop.shop_id));
     }
 
@@ -79,26 +77,64 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Get userId for builder
-    const result = await createListing(userId, apiKey!, body);
+    // ── Preflight: validate shop-scoped profile IDs ───────────────────────
+    // Check that shipping_profile_id and shop_section_id belong to the shop
+    const { getValidAccessToken } = await import("@/lib/etsy-oauth");
+    const ETSY_BASE = "https://openapi.etsy.com/v3";
+    const API_KEY   = `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
+    const fieldErrors: Record<string, string> = {};
 
-    return NextResponse.json(result, {
-      status: result.status === "failed" ? 500 : 200,
-      headers: {
-        ...corsHeaders(),
-        ...rateLimitHeaders(auth),
-      },
-    });
+    for (let i = 0; i < body.shops.length; i++) {
+      const shop = body.shops[i];
+      try {
+        const token = await getValidAccessToken(userId, String(shop.shop_id));
+        const headers = { "x-api-key": API_KEY, "Authorization": `Bearer ${token}`, "Accept": "application/json" };
+
+        // Validate shop_section_id
+        if (shop.shop_section_id) {
+          const sectRes = await fetch(`${ETSY_BASE}/application/shops/${shop.shop_id}/sections`, { headers });
+          if (sectRes.ok) {
+            const sectData = await sectRes.json();
+            const validSectionIds = (sectData.results ?? []).map((s: { shop_section_id: number }) => s.shop_section_id);
+            if (!validSectionIds.includes(shop.shop_section_id)) {
+              fieldErrors[`shops[${i}].shop_section_id`] = `Section ${shop.shop_section_id} not found in shop ${shop.shop_id}.`;
+            }
+          }
+        }
+
+        // Validate shipping_profile_id
+        if (shop.shipping_profile_id) {
+          const shipRes = await fetch(`${ETSY_BASE}/application/shops/${shop.shop_id}/shipping-profiles`, { headers });
+          if (shipRes.ok) {
+            const shipData = await shipRes.json();
+            const validIds = (shipData.results ?? []).map((s: { shipping_profile_id: number }) => s.shipping_profile_id);
+            if (!validIds.includes(shop.shipping_profile_id)) {
+              fieldErrors[`shops[${i}].shipping_profile_id`] = `Shipping profile ${shop.shipping_profile_id} not found in shop ${shop.shop_id}.`;
+            }
+          }
+        }
+      } catch { /* if token fetch fails, the publish step will handle it */ }
+    }
+
+    if (Object.keys(fieldErrors).length > 0) {
+      return NextResponse.json(
+        {
+          error: {
+            code:    "VALIDATION_FAILED",
+            status:  400,
+            message: "Request validation failed.",
+            fields:  fieldErrors,
+          },
+        },
+        { status: 400, headers: corsHeaders() }
+      );
+    }
   }
 
-  // Draft: get userId and save
-  const db      = getDb();
-  const keySnap = await db.collection("apiKeys").doc(apiKey!).get();
-  const userId  = keySnap.data()?.userId as string;
-  const result  = await createListing(userId, apiKey!, body);
+  const result = await createListing(userId, apiKey!, body);
 
   return NextResponse.json(result, {
-    status: 200,
+    status: result.status === "failed" ? 500 : 200,
     headers: { ...corsHeaders(), ...rateLimitHeaders(auth) },
   });
 }

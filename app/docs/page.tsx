@@ -28,6 +28,7 @@ const NAV: NavGroup[] = [
     label: "Listing Builder",
     items: [
       { id: "listing-builder", title: "Overview"          },
+      { id: "lb-uploads",      title: "Uploads",        count: 1 },
       { id: "lb-create",       title: "Create Listing", count: 1 },
       { id: "lb-jobs",         title: "Job Poll",       count: 1 },
     ],
@@ -588,18 +589,24 @@ function StoreConnection() {
 
 function Errors() {
   const codes = [
-    { code:"MISSING_API_KEY",      status:401, desc:"No x-api-key header provided.",                  hint:"Pass your key via the x-api-key header." },
-    { code:"INVALID_API_KEY",      status:401, desc:"API key is missing, invalid, or revoked.",        hint:"Generate a new key at jeterdev.tools/dashboard." },
-    { code:"API_KEY_DISABLED",     status:403, desc:"This API key has been disabled.",                 hint:"Generate a new key at jeterdev.tools/dashboard." },
-    { code:"ENDPOINT_NOT_IN_PLAN", status:403, desc:"Endpoint not available on your plan.",            hint:"Upgrade at jeterdev.tools/pricing." },
-    { code:"STORE_NOT_CONNECTED",  status:403, desc:"Endpoint requires a connected Etsy shop.",        hint:"Connect your shop at jeterdev.tools/dashboard." },
-    { code:"STORE_TOKEN_EXPIRED",  status:503, desc:"Store authorization has expired.",                hint:"Reconnect your shop at jeterdev.tools/dashboard." },
-    { code:"ENDPOINT_NOT_FOUND",   status:404, desc:"This endpoint does not exist.",                  hint:"Check the path against the docs." },
-    { code:"RATE_LIMIT_DAILY",     status:429, desc:"Daily request limit reached.",                   hint:"Limit resets at midnight UTC." },
-    { code:"UPSTREAM_ERROR",       status:502, desc:"The Etsy API returned an error.",                 hint:"Check the details field for the upstream response." },
-    { code:"INTERNAL_ERROR",       status:500, desc:"Something went wrong on our end.",               hint:"Try again or contact support." },
+    { code:"INVALID_API_KEY",         status:401, desc:"API key missing, invalid, or revoked.",              hint:"Generate a new key at jeterdev.tools/dashboard." },
+    { code:"MISSING_API_KEY",         status:401, desc:"No x-api-key header provided.",                      hint:"Pass your key via the x-api-key header." },
+    { code:"API_KEY_DISABLED",        status:403, desc:"This API key has been disabled.",                     hint:"Generate a new key at jeterdev.tools/dashboard." },
+    { code:"ENDPOINT_NOT_IN_PLAN",    status:403, desc:"Endpoint not available on your current plan.",        hint:"Upgrade at jeterdev.tools/pricing." },
+    { code:"STORE_NOT_CONNECTED",     status:403, desc:"Endpoint requires a connected Etsy shop.",            hint:"Connect at jeterdev.tools/dashboard." },
+    { code:"STORE_NOT_OWNED",         status:403, desc:"shop_id is not connected to your account.",           hint:"Connect shops at jeterdev.tools/dashboard." },
+    { code:"STORE_TOKEN_EXPIRED",     status:503, desc:"Store authorization has expired.",                    hint:"Reconnect your shop at jeterdev.tools/dashboard." },
+    { code:"ENDPOINT_NOT_FOUND",      status:404, desc:"This endpoint does not exist.",                      hint:"Check the path against the docs." },
+    { code:"RATE_LIMIT_DAILY",        status:429, desc:"Daily request limit reached.",                       hint:"Limit resets at midnight UTC. Retry-After header included." },
+    { code:"RATE_LIMIT_SECOND",       status:429, desc:"Per-second rate limit exceeded.",                    hint:"Wait the Retry-After seconds before retrying." },
+    { code:"VALIDATION_FAILED",       status:400, desc:"Request validation failed. See fields object.",       hint:"Fix the fields indicated in the fields object." },
+    { code:"TAXONOMY_INVALID",        status:400, desc:"taxonomy_id is not a valid Etsy category.",           hint:"Use GET /categories/list or /categories/{id}/listing-schema." },
+    { code:"JOB_NOT_FOUND",           status:404, desc:"Listing job not found or expired.",                   hint:"Jobs expire after 24 hours. Re-submit the create request." },
+    { code:"ACTIVATION_COST_WARNING", status:200, desc:"state=active costs $0.20 per listing per shop.",     hint:"Check activation_cost_usd in the response." },
+    { code:"UPSTREAM_ERROR",          status:502, desc:"The Etsy API returned an error.",                     hint:"Check the details field for the upstream response." },
+    { code:"INTERNAL_ERROR",          status:500, desc:"Something went wrong on our end.",                   hint:"Try again or contact support." },
   ];
-  const sc: Record<number,string> = { 401:"text-red-400 bg-red-500/10 border-red-500/20", 403:"text-amber-400 bg-amber-500/10 border-amber-500/20", 404:"text-red-400 bg-red-500/10 border-red-500/20", 429:"text-red-400 bg-red-500/10 border-red-500/20", 500:"text-red-400 bg-red-500/10 border-red-500/20", 502:"text-red-400 bg-red-500/10 border-red-500/20", 503:"text-amber-400 bg-amber-500/10 border-amber-500/20" };
+  const sc: Record<number,string> = { 200:"text-emerald-400 bg-emerald-500/10 border-emerald-500/20", 400:"text-amber-400 bg-amber-500/10 border-amber-500/20", 401:"text-red-400 bg-red-500/10 border-red-500/20", 403:"text-amber-400 bg-amber-500/10 border-amber-500/20", 404:"text-red-400 bg-red-500/10 border-red-500/20", 429:"text-red-400 bg-red-500/10 border-red-500/20", 500:"text-red-400 bg-red-500/10 border-red-500/20", 502:"text-red-400 bg-red-500/10 border-red-500/20", 503:"text-amber-400 bg-amber-500/10 border-amber-500/20" };
   return (
     <div className="space-y-5">
       <div>
@@ -687,6 +694,113 @@ function ListingBuilderOverview() {
       <InfoBox type="warn">
         <strong>state=&quot;active&quot;</strong> costs $0.20 USD per listing per shop — this is Etsy&apos;s listing fee. Always use state=&quot;draft&quot; first to verify before activating.
       </InfoBox>
+    </div>
+  );
+}
+
+
+function ListingUploads() {
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Listing Builder</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-white mb-2">Uploads</h1>
+        <p className="text-sm text-white/40 mb-1 font-mono">POST /api/v1/uploads</p>
+        <p className="text-sm text-white/50 leading-relaxed">
+          Upload an image, video, or digital file <strong className="text-white/70">before a listing exists</strong>. Returns a <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">jt-upload://</code> URL that you pass into <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">images[].url</code> on POST /listings/create. Files are cached server-side for 24 hours.
+        </p>
+      </div>
+
+      <InfoBox>This is the recommended way to handle images in the publish flow. Upload all images first, then pass the returned URLs into the listing create payload — no listing_id required.</InfoBox>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Request</p>
+        <p className="text-sm text-white/40 mb-2">Send <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">multipart/form-data</code> with these fields:</p>
+        <table className="w-full text-xs mb-3">
+          <thead>
+            <tr className="text-[10px] text-white/25 uppercase tracking-wider">
+              <th className="text-left pb-2 font-mono w-1/4">Field</th>
+              <th className="text-left pb-2 font-mono w-1/6">Type</th>
+              <th className="text-left pb-2 w-1/6">Required</th>
+              <th className="text-left pb-2">Description</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/4">
+            {[
+              ["file", "binary", true,  "Image, video, or digital file (max 100MB)"],
+              ["type", "string", false, "image (default) · video · digital"],
+            ].map(([n, t, r, d]) => (
+              <tr key={String(n)}>
+                <td className="py-2 font-mono text-white/70">{String(n)}</td>
+                <td className="py-2 text-white/30 font-mono">{String(t)}</td>
+                <td className="py-2">{r ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20">required</span> : <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/4 text-white/30 border border-white/6">optional</span>}</td>
+                <td className="py-2 text-white/40">{String(d)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <CodeBlock code={`curl -X POST "https://jeterdev.tools/api/v1/uploads" \
+  -H "x-api-key: jt_YOUR_KEY" \
+  -F "file=@product-photo.jpg" \
+  -F "type=image"`} />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Response</p>
+        <CodeBlock code={`{
+  "url":          "jt-upload://jt_a1b2c3d4e5f6...",
+  "upload_id":    "jt_a1b2c3d4e5f6...",
+  "filename":     "product-photo.jpg",
+  "size":         248301,
+  "content_type": "image/jpeg",
+  "type":         "image",
+  "expires_in":   "24h"
+}`} lang="json" />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Use in POST /listings/create</p>
+        <CodeBlock code={`// 1. Upload images first
+const upload1 = await fetch("/api/v1/uploads", { method: "POST", body: form1 });
+const { url: imageUrl1 } = await upload1.json();
+// → "jt-upload://jt_a1b2c3d4e5f6..."
+
+const upload2 = await fetch("/api/v1/uploads", { method: "POST", body: form2 });
+const { url: imageUrl2 } = await upload2.json();
+
+// 2. Pass URLs into listing create — bridge resolves them automatically
+await fetch("/api/v1/listings/create", {
+  method: "POST",
+  body: JSON.stringify({
+    state: "publish",
+    shops: [...],
+    listing: { title: "...", ... },
+    images: [
+      { url: imageUrl1, rank: 1 },
+      { url: imageUrl2, rank: 2 }
+    ]
+  })
+})`} />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Supported file types</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {[
+            ["image",   "JPG, PNG, GIF, WebP", "Max 10 per listing"],
+            ["video",   "MP4, MOV, MPEG",       "Max 1 per listing"],
+            ["digital", "PDF, ZIP, SVG, PNG",   "Max 10 per listing"],
+          ].map(([type, formats, limit]) => (
+            <div key={String(type)} className="bg-white/3 border border-white/6 rounded-xl p-3">
+              <div className="text-xs font-mono text-white/50 uppercase mb-1">{String(type)}</div>
+              <div className="text-xs text-white/70">{String(formats)}</div>
+              <div className="text-[10px] text-white/30 mt-0.5">{String(limit)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <InfoBox type="warn">Upload URLs expire after 24 hours. If the publish call fails and you retry after 24h, re-upload the files first.</InfoBox>
     </div>
   );
 }
@@ -967,6 +1081,7 @@ export default function DocsPage() {
       case "store-connection": return <StoreConnection />;
       case "errors":           return <Errors />;
       case "listing-builder":  return <ListingBuilderOverview />;
+      case "lb-uploads":       return <ListingUploads />;
       case "lb-create":        return <ListingCreate />;
       case "lb-jobs":          return <ListingJobPoll />;
       case "stores-list":      return <StoresList />;
