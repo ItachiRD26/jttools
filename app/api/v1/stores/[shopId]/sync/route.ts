@@ -1,6 +1,6 @@
 // LOCATION: app/api/v1/stores/[shopId]/sync/route.ts
 // POST /api/v1/stores/{shopId}/sync
-// Returns full bundle: shipping profiles + return policies + processing profiles + shop sections + production partners
+// Full shop data refresh — surfaces per-resource errors instead of empty arrays
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
@@ -10,17 +10,36 @@ import { getValidAccessToken } from "@/lib/etsy-oauth";
 const ETSY_BASE = "https://openapi.etsy.com/v3";
 const API_KEY   = () => `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
 
-async function etsyGet(path: string, accessToken: string) {
-  const res = await fetch(`${ETSY_BASE}${path}`, {
-    headers: {
-      "x-api-key":     API_KEY(),
-      "Authorization": `Bearer ${accessToken}`,
-      "Accept":        "application/json",
-    },
-  });
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.results ?? data ?? [];
+interface FetchResult {
+  data:  unknown[] | null;
+  error: string | null;
+  status: number | null;
+}
+
+async function etsyGet(path: string, accessToken: string): Promise<FetchResult> {
+  try {
+    const res = await fetch(`${ETSY_BASE}${path}`, {
+      headers: {
+        "x-api-key":     API_KEY(),
+        "Authorization": `Bearer ${accessToken}`,
+        "Accept":        "application/json",
+      },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      let errBody: unknown;
+      try { errBody = JSON.parse(errText); } catch { errBody = errText; }
+      return { data: null, error: `Etsy ${res.status}: ${JSON.stringify(errBody)}`, status: res.status };
+    }
+
+    const data    = await res.json();
+    const results = data.results ?? (Array.isArray(data) ? data : (data && typeof data === "object" ? [data] : []));
+    return { data: results, error: null, status: res.status };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    return { data: null, error: msg, status: null };
+  }
 }
 
 export async function POST(
@@ -55,25 +74,49 @@ export async function POST(
     );
   }
 
-  // Fetch all four resources in parallel
-  const [shippingProfiles, returnPolicies, processingProfiles, shopSections, productionPartners] =
+  // Fetch all resources in parallel — each tracked independently
+  const [shipping, returnPolicies, processingProfiles, sections, partners] =
     await Promise.all([
-      etsyGet(`/application/shops/${shopId}/shipping-profiles`, accessToken),
-      etsyGet(`/application/shops/${shopId}/return-policies`,   accessToken),
-      etsyGet(`/application/shops/${shopId}/production-partner-profiles`, accessToken),
-      etsyGet(`/application/shops/${shopId}/sections`,          accessToken),
+      etsyGet(`/application/shops/${shopId}/shipping-profiles`,  accessToken),
+      // Try new return-policies endpoint, then fall back to legacy
+      etsyGet(`/application/shops/${shopId}/return-policies`,    accessToken).then(async r => {
+        if (r.error) return etsyGet(`/application/shops/${shopId}/policies/return`, accessToken);
+        return r;
+      }),
+      etsyGet(`/application/shops/${shopId}/production-partners`, accessToken),
+      etsyGet(`/application/shops/${shopId}/sections`,           accessToken),
       etsyGet(`/application/shops/${shopId}/production-partners`, accessToken),
     ]);
 
   const synced_at = new Date().toISOString();
+  const errors: Record<string, string> = {};
 
-  return NextResponse.json({
+  if (shipping.error)          errors.shipping_profiles    = shipping.error;
+  if (returnPolicies.error)    errors.return_policies       = returnPolicies.error;
+  if (processingProfiles.error) errors.processing_profiles  = processingProfiles.error;
+  if (sections.error)          errors.shop_sections         = sections.error;
+
+  const hasErrors    = Object.keys(errors).length > 0;
+  const allFailed    = hasErrors && !shipping.data && !returnPolicies.data && !sections.data;
+
+  const response: Record<string, unknown> = {
     shop_id:             shopId,
     synced_at,
-    shipping_profiles:   shippingProfiles  ?? [],
-    return_policies:     returnPolicies    ?? [],
-    processing_profiles: processingProfiles ?? [],
-    shop_sections:       shopSections       ?? [],
-    production_partners: productionPartners ?? [],
+    status:              allFailed ? "failed" : hasErrors ? "partial" : "ok",
+    shipping_profiles:   shipping.data          ?? [],
+    return_policies:     returnPolicies.data     ?? [],
+    processing_profiles: processingProfiles.data ?? [],
+    shop_sections:       sections.data           ?? [],
+    production_partners: partners.data           ?? [],
+  };
+
+  // Surface errors so consumers know what failed vs what's genuinely empty
+  if (hasErrors) {
+    response.errors = errors;
+    response.note   = "Some resources failed to fetch. Check the 'errors' field for details. Empty arrays in the response may indicate fetch failure, not absence of data.";
+  }
+
+  return NextResponse.json(response, {
+    status: allFailed ? 502 : 200,
   });
 }
