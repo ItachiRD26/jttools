@@ -337,6 +337,8 @@ function buildEtsyInventory(variations: VariationsConfig, basePrice: number): Re
 }
 
 // ─── Resolve jt-upload:// URL → binary buffer ────────────────────────────────
+// For presigned uploads (Vercel Blob): fetch from blobUrl stored in Firestore
+// For legacy small uploads: reconstruct from base64 data in Firestore
 
 async function resolveUploadUrl(url: string, db: Firestore): Promise<{ buffer: Buffer; contentType: string; filename: string } | null> {
   if (!url.startsWith("jt-upload://")) return null;
@@ -351,23 +353,27 @@ async function resolveUploadUrl(url: string, db: Firestore): Promise<{ buffer: B
   const expiresAt: Date = data.expiresAt?.toDate?.() ?? new Date(0);
   if (new Date() > expiresAt) return null;
 
-  let buffer: Buffer;
+  // Presigned upload path — file is on Vercel Blob, fetch it
+  if (data.blobUrl) {
+    const res = await fetch(data.blobUrl);
+    if (!res.ok) return null;
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return { buffer, contentType: data.contentType, filename: data.filename };
+  }
 
+  // Legacy small upload — inline base64 in Firestore
   if (data.isChunked) {
-    // Reassemble chunks
     const chunks: Buffer[] = [];
     for (let i = 0; i < data.chunks; i++) {
       const chunkSnap = await db.collection("uploadChunks").doc(`${uploadId}_${i}`).get();
       if (!chunkSnap.exists) return null;
       chunks.push(Buffer.from(chunkSnap.data()!.data, "base64"));
     }
-    buffer = Buffer.concat(chunks);
-  } else {
-    if (!data.data) return null;
-    buffer = Buffer.from(data.data, "base64");
+    return { buffer: Buffer.concat(chunks), contentType: data.contentType, filename: data.filename };
   }
 
-  return { buffer, contentType: data.contentType, filename: data.filename };
+  if (!data.data) return null;
+  return { buffer: Buffer.from(data.data, "base64"), contentType: data.contentType, filename: data.filename };
 }
 
 // ─── Upload image to Etsy (URL or jt-upload:// → re-upload) ─────────────────

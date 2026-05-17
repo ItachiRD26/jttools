@@ -705,53 +705,69 @@ function ListingUploads() {
       <div>
         <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Listing Builder</p>
         <h1 className="text-2xl font-semibold tracking-tight text-white mb-2">Uploads</h1>
-        <p className="text-sm text-white/40 mb-1 font-mono">POST /api/v1/uploads</p>
         <p className="text-sm text-white/50 leading-relaxed">
-          Upload an image, video, or digital file <strong className="text-white/70">before a listing exists</strong>. Returns a <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">jt-upload://</code> URL that you pass into <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">images[].url</code> on POST /listings/create. Files are cached server-side for 24 hours.
+          Upload images, videos, or digital files <strong className="text-white/70">before a listing exists</strong>. Uses a presigned URL flow — the file goes directly to storage, bypassing the 4.5MB function limit. Supports up to <strong className="text-white/70">100MB per file</strong>. Files cached 24 hours.
         </p>
       </div>
 
-      <InfoBox>This is the recommended way to handle images in the publish flow. Upload all images first, then pass the returned URLs into the listing create payload — no listing_id required.</InfoBox>
+      <InfoBox>The presigned flow avoids all server-side size limits. Your client uploads directly to storage — JeterDev Tools never touches the binary.</InfoBox>
 
       <div>
-        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Request</p>
-        <p className="text-sm text-white/40 mb-2">Send <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">multipart/form-data</code> with these fields:</p>
-        <table className="w-full text-xs mb-3">
-          <thead>
-            <tr className="text-[10px] text-white/25 uppercase tracking-wider">
-              <th className="text-left pb-2 font-mono w-1/4">Field</th>
-              <th className="text-left pb-2 font-mono w-1/6">Type</th>
-              <th className="text-left pb-2 w-1/6">Required</th>
-              <th className="text-left pb-2">Description</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/4">
-            {[
-              ["file", "binary", true,  "Image, video, or digital file (max 100MB)"],
-              ["type", "string", false, "image (default) · video · digital"],
-            ].map(([n, t, r, d]) => (
-              <tr key={String(n)}>
-                <td className="py-2 font-mono text-white/70">{String(n)}</td>
-                <td className="py-2 text-white/30 font-mono">{String(t)}</td>
-                <td className="py-2">{r ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20">required</span> : <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/4 text-white/30 border border-white/6">optional</span>}</td>
-                <td className="py-2 text-white/40">{String(d)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <CodeBlock code={`curl -X POST "https://jeterdev.tools/api/v1/uploads" \
-  -H "x-api-key: jt_YOUR_KEY" \
-  -F "file=@product-photo.jpg" \
-  -F "type=image"`} />
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3">3-step flow</p>
+        <div className="space-y-2">
+          {[
+            ["1", "POST /uploads/presign", "Get a signed upload URL + upload_id"],
+            ["2", "PUT file → upload_url",  "Client uploads directly to storage (no size limit)"],
+            ["3", "POST /uploads/confirm",  "Confirm the upload, get your jt-upload:// URL"],
+          ].map(([n, t, d]) => (
+            <div key={n} className="flex items-start gap-4 p-3 border border-white/6 rounded-xl">
+              <span className="text-sm font-mono font-bold text-[#7F77DD] shrink-0 mt-0.5">{n}</span>
+              <div><p className="text-sm font-mono text-white/70">{t}</p><p className="text-xs text-white/35 mt-0.5">{d}</p></div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div>
-        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Response</p>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Step 1 — POST /api/v1/uploads/presign</p>
+        <CodeBlock code={`curl -X POST "https://jeterdev.tools/api/v1/uploads/presign" \
+  -H "x-api-key: jt_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filename":     "product-photo.jpg",
+    "content_type": "image/jpeg",
+    "size":         15728640,
+    "type":         "image"
+  }'`} />
         <CodeBlock code={`{
-  "url":          "jt-upload://jt_a1b2c3d4e5f6...",
-  "upload_id":    "jt_a1b2c3d4e5f6...",
+  "upload_id":  "jt_a1b2c3d4...",
+  "upload_url": "https://blob.vercel-storage.com/...",
+  "token":      "vercel_blob_client_...",
+  "expires_in": "30min"
+}`} lang="json" />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Step 2 — PUT file directly to upload_url</p>
+        <CodeBlock code={`// Client-side — use the upload_url returned from step 1
+const response = await fetch(upload_url, {
+  method:  "PUT",
+  headers: { "Content-Type": "image/jpeg" },
+  body:    fileBlob,  // File object, up to 100MB
+});`} />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Step 3 — POST /api/v1/uploads/confirm</p>
+        <CodeBlock code={`curl -X POST "https://jeterdev.tools/api/v1/uploads/confirm" \
+  -H "x-api-key: jt_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "upload_id": "jt_a1b2c3d4..." }'`} />
+        <CodeBlock code={`{
+  "url":          "jt-upload://jt_a1b2c3d4...",
+  "upload_id":    "jt_a1b2c3d4...",
   "filename":     "product-photo.jpg",
-  "size":         248301,
+  "size":         15728640,
   "content_type": "image/jpeg",
   "type":         "image",
   "expires_in":   "24h"
@@ -760,36 +776,46 @@ function ListingUploads() {
 
       <div>
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Use in POST /listings/create</p>
-        <CodeBlock code={`// 1. Upload images first
-const upload1 = await fetch("/api/v1/uploads", { method: "POST", body: form1 });
-const { url: imageUrl1 } = await upload1.json();
-// → "jt-upload://jt_a1b2c3d4e5f6..."
+        <CodeBlock code={`// Full flow example
+async function uploadAndCreate(imageFile: File) {
+  // 1. Presign
+  const presign = await fetch("/api/v1/uploads/presign", {
+    method: "POST",
+    headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: imageFile.name, content_type: imageFile.type, size: imageFile.size }),
+  }).then(r => r.json());
 
-const upload2 = await fetch("/api/v1/uploads", { method: "POST", body: form2 });
-const { url: imageUrl2 } = await upload2.json();
+  // 2. Upload directly to storage
+  await fetch(presign.upload_url, { method: "PUT", body: imageFile });
 
-// 2. Pass URLs into listing create — bridge resolves them automatically
-await fetch("/api/v1/listings/create", {
-  method: "POST",
-  body: JSON.stringify({
-    state: "publish",
-    shops: [...],
-    listing: { title: "...", ... },
-    images: [
-      { url: imageUrl1, rank: 1 },
-      { url: imageUrl2, rank: 2 }
-    ]
-  })
-})`} />
+  // 3. Confirm
+  const confirmed = await fetch("/api/v1/uploads/confirm", {
+    method: "POST",
+    headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ upload_id: presign.upload_id }),
+  }).then(r => r.json());
+
+  // 4. Create listing using jt-upload:// URL
+  await fetch("/api/v1/listings/create", {
+    method: "POST",
+    headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      state: "publish",
+      shops: [...],
+      listing: { title: "AI Generated Mug", ... },
+      images: [{ url: confirmed.url, rank: 1 }]
+    }),
+  });
+}`} />
       </div>
 
       <div>
-        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Supported file types</p>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Supported formats and limits</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {[
-            ["image",   "JPG, PNG, GIF, WebP", "Max 10 per listing"],
-            ["video",   "MP4, MOV, MPEG",       "Max 1 per listing"],
-            ["digital", "PDF, ZIP, SVG, PNG",   "Max 10 per listing"],
+            ["image",   "JPG, PNG, GIF, WebP", "Max 100MB · Max 10 per listing"],
+            ["video",   "MP4, MOV, MPEG",       "Max 100MB · Max 1 per listing"],
+            ["digital", "PDF, ZIP, SVG, PNG",   "Max 100MB · Max 10 per listing"],
           ].map(([type, formats, limit]) => (
             <div key={String(type)} className="bg-white/3 border border-white/6 rounded-xl p-3">
               <div className="text-xs font-mono text-white/50 uppercase mb-1">{String(type)}</div>
@@ -800,7 +826,7 @@ await fetch("/api/v1/listings/create", {
         </div>
       </div>
 
-      <InfoBox type="warn">Upload URLs expire after 24 hours. If the publish call fails and you retry after 24h, re-upload the files first.</InfoBox>
+      <InfoBox type="warn">Upload URLs expire after 24 hours. If /listings/create fails and you retry after 24h, repeat the presign flow.</InfoBox>
     </div>
   );
 }
