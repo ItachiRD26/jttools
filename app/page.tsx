@@ -47,9 +47,8 @@ const ENDPOINT_GROUPS = [
 ];
 
 const PLANS = [
-  { name: "Free",    price: "$0",  period: "",    daily: "100 req/day",    cta: "Get started free", href: "/auth",    featured: false },
-  { name: "Starter", price: "$25", period: "/mo", daily: "2,000 req/day",  cta: "Get Starter",      href: "/pricing", featured: false },
-  { name: "Pro",     price: "$50", period: "/mo", daily: "50,000 req/day", cta: "Get Pro",          href: "/pricing", featured: true  },
+  { name: "Free",    price: "$0",  period: "",    daily: "500 req/day",    cta: "Get started free", href: "/auth",    featured: false },
+  { name: "Pro",     price: "$50", period: "/mo", daily: "30,000 req/day", cta: "Get Pro",          href: "/pricing", featured: true  },
 ];
 
 export default function LandingPage() {
