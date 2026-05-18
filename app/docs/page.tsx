@@ -715,7 +715,7 @@ function NotificationsPushover() {
       <div>
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">What the notification looks like</p>
         <div className="bg-white/3 border border-white/6 rounded-xl p-4 font-mono text-sm space-y-1">
-          <p className="text-white/70 font-bold">💰 New sale — BambiCraftCo</p>
+          <p className="text-white/70 font-bold">💰 New sale — YOUR STORE NAME</p>
           <p className="text-white/50 text-xs">Order #3456789012</p>
           <p className="text-white/50 text-xs">$31.99 USD · 2 items · New York</p>
           <p className="text-[#7F77DD] text-xs underline">View order on Etsy →</p>
