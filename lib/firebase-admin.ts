@@ -17,11 +17,12 @@ export function getAdminApp(): App {
 
   app = initializeApp({
     credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID!,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL!,
-      // Replace newline escape sequences that env vars sometimes carry
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+      projectId:    process.env.FIREBASE_PROJECT_ID!,
+      clientEmail:  process.env.FIREBASE_CLIENT_EMAIL!,
+      privateKey:   process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
     }),
+    // ⚠️ Required for Firebase Storage
+    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   });
 
   return app;
@@ -35,11 +36,9 @@ export function getDb(): Firestore {
   return db;
 }
 
-// ─── Firestore Collection References ────────
-
 export const Collections = {
-  API_KEYS: "apiKeys",       // apiKey string → { userId, planId, active, createdAt }
-  USERS: "users",            // userId → { email, planId, createdAt }
-  USAGE: "usage",            // apiKey → subcollection daily/{YYYY-MM-DD} → { count }
-  LOGS: "logs",              // optional audit log per request
+  API_KEYS: "apiKeys",
+  USERS:    "users",
+  USAGE:    "usage",
+  LOGS:     "logs",
 } as const;
