@@ -16,7 +16,7 @@ export interface ShopConfig {
   shop_id:               number;
   shipping_profile_id?:  number;
   return_policy_id?:     number;
-  processing_profile_id?: number;
+  processing_profile_id?: number | string; // string for synthetic "1-3" composite IDs
   shop_section_id?:      number;
   production_partner_ids?: number[];
   price?:                number; // per-shop price override
@@ -277,29 +277,24 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   // Etsy readiness state IDs:
   //   1 = 1 day,  2 = 1-2 days,  3 = 1-3 days,  4 = 3-5 days
   //   5 = 1-2 weeks,  6 = 2-4 weeks,  7 = 4-6 weeks,  8 = 6-8 weeks
-  // readiness_state_id is REQUIRED by Etsy for physical listings.
-  // Etsy IDs: 1=1day 2=1-2days 3=1-3days 4=3-5days 5=1-2wks 6=2-4wks 7=4-6wks 8=6-8wks
+  // Etsy accepts EITHER readiness_state_id (saved shop state) OR processing_min+max (inline).
+  // We always use processing_min+max to avoid shop-specific ID lookup failures.
+  // If user passes shops[].processing_profile_id as a synthetic "1-3" composite, parse it.
   {
-    const min = listing.processing_min ?? 1;
-    const max = listing.processing_max ?? 3;
-    let readinessId = listing.readiness_state_id ?? 0;
+    let min = listing.processing_min ?? 1;
+    let max = listing.processing_max ?? 3;
 
-    if (!readinessId) {
-      if (max <= 1)       readinessId = 1;
-      else if (max <= 2)  readinessId = 2;
-      else if (max <= 3)  readinessId = 3;
-      else if (max <= 5)  readinessId = 4;
-      else if (max <= 14) readinessId = 5;
-      else if (max <= 28) readinessId = 6;
-      else if (max <= 42) readinessId = 7;
-      else                readinessId = 8;
+    // Parse synthetic processing_profile_id (e.g. "1-3") if passed at shop level
+    const profileId = shopConfig.processing_profile_id;
+    if (profileId && typeof profileId === "string" && profileId.includes("-")) {
+      const parts = String(profileId).split("-");
+      min = parseInt(parts[0]) || min;
+      max = parseInt(parts[1]) || max;
     }
 
-    // Always include — required by Etsy
-    payload.readiness_state_id = readinessId;
-    // Also set processing min/max for display purposes
-    if (listing.processing_min) payload.processing_min = min;
-    if (listing.processing_max) payload.processing_max = max;
+    // Send inline — no readiness_state_id needed
+    payload.processing_min = min;
+    payload.processing_max = max;
   }
   if (shopConfig.production_partner_ids?.length) {
     payload.production_partner_ids = shopConfig.production_partner_ids;
