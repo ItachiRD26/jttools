@@ -1,15 +1,10 @@
 // LOCATION: app/api/v1/uploads/presign/route.ts
 // POST /api/v1/uploads/presign
 //
-// Step 1 of the presigned upload flow.
-// Returns a signed URL the client uses to PUT the file DIRECTLY to Vercel Blob.
-// Bypasses Vercel's 4.5MB function body limit — supports up to 500MB.
-//
-// Flow:
-//   1. POST /uploads/presign { filename, content_type, size, type }
-//   2. Client PUT file → upload_url (directly to Vercel Blob)
-//   3. POST /uploads/confirm { upload_id } → returns jt-upload:// URL
-//   4. Use jt-upload:// URL in POST /listings/create images[].url
+// Step 1 — returns Vercel Blob client upload token.
+// The client uses this token with @vercel/blob's upload() or a direct PUT.
+// File goes DIRECTLY to Vercel Blob — never through this function.
+// Supports up to 100MB per file.
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
@@ -19,6 +14,13 @@ import { FieldValue } from "firebase-admin/firestore";
 import crypto from "crypto";
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+
+const ALLOWED_CONTENT_TYPES = [
+  "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
+  "video/mp4", "video/mov", "video/mpeg", "video/quicktime",
+  "application/pdf", "application/zip", "application/x-zip-compressed",
+  "image/svg+xml", "text/plain",
+];
 
 function cors() {
   return {
@@ -41,7 +43,6 @@ export async function POST(req: NextRequest) {
   const keySnap = await db.collection("apiKeys").doc(apiKey!).get();
   const userId  = keySnap.data()?.userId as string;
 
-  // handleUpload manages the Vercel Blob client-upload token handshake
   const body = await req.json() as HandleUploadBody;
 
   try {
@@ -49,17 +50,15 @@ export async function POST(req: NextRequest) {
       body,
       request: req,
       onBeforeGenerateToken: async (pathname, clientPayload) => {
-        // Validate file before issuing token
-        const meta = clientPayload ? JSON.parse(clientPayload) : {};
-        const size = meta.size ?? 0;
+        const meta       = clientPayload ? JSON.parse(clientPayload) : {};
+        const size       = meta.size ?? 0;
+        const uploadId   = `jt_${crypto.randomBytes(16).toString("hex")}`;
 
         if (size > MAX_FILE_SIZE) {
-          throw new Error(`File too large: ${(size / 1024 / 1024).toFixed(1)}MB. Maximum is 100MB.`);
+          throw new Error(`File too large: ${(size / 1024 / 1024).toFixed(1)}MB. Max is 100MB.`);
         }
 
-        const uploadId = `jt_${crypto.randomBytes(16).toString("hex")}`;
-
-        // Store pending upload metadata
+        // Save pending upload to Firestore
         await db.collection("uploads").doc(uploadId).set({
           userId,
           apiKey,
@@ -75,20 +74,14 @@ export async function POST(req: NextRequest) {
         });
 
         return {
-          allowedContentTypes: [
-            "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
-            "video/mp4", "video/mov", "video/mpeg", "video/quicktime",
-            "application/pdf", "application/zip", "application/x-zip-compressed",
-          ],
-          maximumSizeInBytes: MAX_FILE_SIZE,
-          tokenPayload: JSON.stringify({ uploadId, userId }),
+          allowedContentTypes: ALLOWED_CONTENT_TYPES,
+          maximumSizeInBytes:  MAX_FILE_SIZE,
+          tokenPayload:        JSON.stringify({ uploadId, userId }),
         };
       },
       onUploadCompleted: async ({ blob, tokenPayload }) => {
-        // Called by Vercel Blob after the client finishes uploading
         const { uploadId } = JSON.parse(tokenPayload ?? "{}");
         if (!uploadId) return;
-
         await db.collection("uploads").doc(uploadId).update({
           blobUrl:  blob.url,
           status:   "ready",
