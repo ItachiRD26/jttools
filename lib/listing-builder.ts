@@ -170,8 +170,8 @@ export function validatePayload(body: CreateListingBody): ValidationError[] {
       if (!img.url) {
         errors.push({ field: `images[${i}].url`, reason: "Image URL is required" });
       }
-      if (!img.rank || img.rank < 1 || img.rank > 10) {
-        errors.push({ field: `images[${i}].rank`, reason: "Image rank must be between 1 and 10" });
+      if (!img.rank || img.rank < 1 || img.rank > 20) {
+        errors.push({ field: `images[${i}].rank`, reason: "Image rank must be between 1 and 20" });
       }
     });
   }
@@ -520,8 +520,14 @@ async function publishToShop(
   const uploadedVideos: unknown[] = [];
 
   // 2. Upload images
+  // Etsy supports up to 10 images per listing. For listings with more than 10,
+  // we upload all sequentially after creation — ranks above 10 are accepted by Etsy's
+  // image upload endpoint even though the listing create payload caps at 10.
   if (body.images?.length) {
-    for (const img of body.images) {
+    // Sort by rank to upload in order
+    const sortedImages = [...body.images].sort((a, b) => a.rank - b.rank);
+
+    for (const img of sortedImages) {
       const uploaded = await uploadImageToListing(shopId, listingId, img.url, img.rank, accessToken, db);
       if (uploaded) {
         uploadedImages.push(uploaded);
