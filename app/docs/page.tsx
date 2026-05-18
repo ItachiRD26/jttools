@@ -716,9 +716,9 @@ function ListingUploads() {
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3">3-step flow</p>
         <div className="space-y-2">
           {[
-            ["1", "POST /uploads/presign",           "Get an upload_id and upload_url"],
-            ["2", "PUT file → upload_url",            "Upload binary directly — no size limit, works with curl or fetch"],
-            ["3", "POST /uploads/confirm",            "Get your jt-upload:// URL to use in /listings/create"],
+            ["1", "POST /uploads/presign",  "Get upload_id + a signed Firebase Storage URL"],
+            ["2", "PUT file → upload_url",  "PUT directly to Firebase Storage — no size limit, file never touches Vercel"],
+            ["3", "POST /uploads/confirm",  "Confirm upload and get your jt-upload:// URL"],
           ].map(([n, t, d]) => (
             <div key={n} className="flex items-start gap-4 p-3 border border-white/6 rounded-xl">
               <span className="text-sm font-mono font-bold text-[#7F77DD] shrink-0 mt-0.5">{n}</span>
@@ -735,17 +735,20 @@ function ListingUploads() {
   -H "Content-Type: application/json" \
   -d '{"filename":"product-photo.jpg","content_type":"image/jpeg","size":15728640,"type":"image"}'`} />
         <CodeBlock code={`{
-  "upload_id":  "jt_a1b2c3d4...",
-  "upload_url": "https://jeterdev.tools/api/v1/uploads/stream/jt_a1b2c3d4...",
-  "method":     "PUT",
-  "expires_in": "30min"
+  "upload_id":    "jt_a1b2c3d4...",
+  "upload_url":   "https://storage.googleapis.com/...?Signature=...",
+  "method":       "PUT",
+  "content_type": "image/jpeg",
+  "expires_in":   "30min",
+  "note":         "PUT your file binary to upload_url with Content-Type header"
 }`} lang="json" />
       </div>
 
       <div>
-        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Step 2 — PUT file to upload_url (any HTTP client)</p>
-        <CodeBlock code={`# curl
-curl -X PUT "https://jeterdev.tools/api/v1/uploads/stream/jt_a1b2c3d4..." \
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Step 2 — PUT file directly to upload_url (Firebase Storage)</p>
+        <p className="text-sm text-white/40 mb-2">The file goes directly to Firebase Storage — never through Vercel. No size limit.</p>
+        <CodeBlock code={`# curl — empty response body on success (HTTP 200)
+curl -X PUT "https://storage.googleapis.com/...?Signature=..." \
   -H "Content-Type: image/jpeg" \
   --data-binary "@/path/to/photo.jpg"
 
@@ -753,13 +756,9 @@ curl -X PUT "https://jeterdev.tools/api/v1/uploads/stream/jt_a1b2c3d4..." \
 await fetch(upload_url, {
   method:  "PUT",
   headers: { "Content-Type": "image/jpeg" },
-  body:    fileBlob,   // File or Buffer, up to 50MB
-});`} />
-        <CodeBlock code={`{
-  "upload_id": "jt_a1b2c3d4...",
-  "status":    "ready",
-  "note":      "Now call POST /uploads/confirm"
-}`} lang="json" />
+  body:    fileBlob,   // File, Buffer, or ReadableStream — up to 5GB
+});
+// Empty response body = success`} />
       </div>
 
       <div>
@@ -780,44 +779,65 @@ await fetch(upload_url, {
       </div>
 
       <div>
-        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Full curl test (copy-paste ready)</p>
-        <CodeBlock code={`# 1. Presign
-PRESIGN=$(curl -s -X POST "https://jeterdev.tools/api/v1/uploads/presign" \
-  -H "x-api-key: jt_YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"filename":"test.jpg","content_type":"image/jpeg","size":1000}')
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Full example — Node.js</p>
+        <CodeBlock code={`const fs = require("fs");
+const JT_KEY = "jt_YOUR_KEY";
+const BASE   = "https://jeterdev.tools/api/v1";
 
-UPLOAD_ID=$(echo $PRESIGN | grep -o '"upload_id":"[^"]*"' | cut -d'"' -f4)
-UPLOAD_URL=$(echo $PRESIGN | grep -o '"upload_url":"[^"]*"' | cut -d'"' -f4)
+async function uploadImage(filePath, filename) {
+  const size = fs.statSync(filePath).size;
 
-# 2. Upload file
-curl -X PUT "$UPLOAD_URL" \
-  -H "Content-Type: image/jpeg" \
-  --data-binary "@photo.jpg"
+  // 1. Presign
+  const { upload_id, upload_url } = await fetch(\`\${BASE}/uploads/presign\`, {
+    method:  "POST",
+    headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
+    body:    JSON.stringify({ filename, content_type: "image/jpeg", size }),
+  }).then(r => r.json());
 
-# 3. Confirm
-curl -X POST "https://jeterdev.tools/api/v1/uploads/confirm" \
-  -H "x-api-key: jt_YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d "{\"upload_id\":\"$UPLOAD_ID\"}"
-# → { "url": "jt-upload://jt_...", ... }`} />
+  // 2. PUT directly to Firebase Storage
+  await fetch(upload_url, {
+    method:  "PUT",
+    headers: { "Content-Type": "image/jpeg" },
+    body:    fs.readFileSync(filePath),
+  });
+  // Empty response = success
+
+  // 3. Confirm
+  const { url } = await fetch(\`\${BASE}/uploads/confirm\`, {
+    method:  "POST",
+    headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
+    body:    JSON.stringify({ upload_id }),
+  }).then(r => r.json());
+
+  return url; // "jt-upload://jt_..."
+}
+
+// Use in listings/create
+const imageUrl = await uploadImage("./ai-product-15mb.jpg", "product.jpg");
+
+await fetch(\`\${BASE}/listings/create\`, {
+  method:  "POST",
+  headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
+  body: JSON.stringify({
+    state:   "draft",
+    shops:   [{ shop_id: 61004439, shipping_profile_id: 289094606827, return_policy_id: 1396555302092 }],
+    listing: { title: "AI Product", description: "...", taxonomy_id: 482, price: 29.99, quantity: 10, who_made: "i_did", when_made: "2020_2026" },
+    images:  [{ url: imageUrl, rank: 1 }],
+  }),
+});`} />
       </div>
 
       <div>
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Use jt-upload:// in POST /listings/create</p>
-        <CodeBlock code={`await fetch("/api/v1/listings/create", {
-  method: "POST",
-  headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
-  body: JSON.stringify({
-    state: "publish",
-    shops: [...],
-    listing: { title: "AI Generated Mug", ... },
-    images: [
-      { url: "jt-upload://jt_a1b2c3d4...", rank: 1 },  // ← from confirm step
-      { url: "jt-upload://jt_b2c3d4e5...", rank: 2 },
-    ]
-  }),
-});`} />
+        <CodeBlock code={`{
+  "state": "publish",
+  "shops": [...],
+  "listing": { "title": "AI Generated Mug", ... },
+  "images": [
+    { "url": "jt-upload://jt_a1b2c3d4...", "rank": 1 },
+    { "url": "jt-upload://jt_b2c3d4e5...", "rank": 2 }
+  ]
+}`} lang="json" />
       </div>
 
       <div>
