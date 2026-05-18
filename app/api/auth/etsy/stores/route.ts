@@ -1,5 +1,6 @@
 // LOCATION: app/api/auth/etsy/stores/route.ts
 // GET /api/auth/etsy/stores — returns all connected Etsy shops for the user
+// Includes token_valid so dashboard can show reconnect button when expired
 
 import { NextRequest, NextResponse } from "next/server";
 import { getAuth } from "firebase-admin/auth";
@@ -22,14 +23,24 @@ export async function GET(req: NextRequest) {
   }
 
   const connections = await getAllStoreConnections(uid);
+  const now         = new Date();
 
-  // Return only safe fields — never expose tokens to the client
-  const stores = connections.map(c => ({
-    shopId:     c.shopId,
-    shopName:   c.shopName,
-    etsyUserId: c.etsyUserId,
-    connectedAt: c.connectedAt,
-  }));
+  const stores = connections.map(c => {
+    const expiresAt = c.expiresAt instanceof Date
+      ? c.expiresAt
+      : (c.expiresAt as { toDate: () => Date })?.toDate?.() ?? new Date(0);
+
+    // Token is valid if it expires more than 5 minutes from now
+    const token_valid = expiresAt.getTime() - now.getTime() > 5 * 60 * 1000;
+
+    return {
+      shopId:      c.shopId,
+      shopName:    c.shopName,
+      etsyUserId:  c.etsyUserId,
+      connectedAt: c.connectedAt,
+      token_valid,
+    };
+  });
 
   return NextResponse.json({ stores });
 }

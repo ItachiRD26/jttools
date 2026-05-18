@@ -546,6 +546,19 @@ function StoreConnection() {
         <p className="text-sm text-white/50 leading-relaxed">Endpoints that access your own shop data require a connected Etsy store. Each user authenticates independently — your data is completely isolated from other users. Store connection uses OAuth 2.0 with PKCE and must be done through the dashboard.</p>
       </div>
       <InfoBox>Once connected, JeterDev Tools manages credential refresh automatically. There is no API endpoint for connecting a store.</InfoBox>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="bg-white/3 border border-white/6 rounded-xl p-4">
+          <p className="text-xs font-mono text-white/40 uppercase mb-1">Access token</p>
+          <p className="text-sm font-semibold text-white">1 hour</p>
+          <p className="text-xs text-white/30 mt-1">Auto-refreshed transparently. You never notice this.</p>
+        </div>
+        <div className="bg-white/3 border border-white/6 rounded-xl p-4">
+          <p className="text-xs font-mono text-white/40 uppercase mb-1">Refresh token</p>
+          <p className="text-sm font-semibold text-white">90 days</p>
+          <p className="text-xs text-white/30 mt-1">Only when this expires do you need to reconnect. Dashboard shows a red indicator.</p>
+        </div>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4">
           <p className="text-[10px] font-mono text-emerald-400 uppercase tracking-widest mb-3">✓ API key only</p>

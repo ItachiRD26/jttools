@@ -245,11 +245,8 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   const payload: Record<string, unknown> = {
     title:            listing.title,
     description:      listing.description,
-    price: {
-      amount:        Math.round(price * 100),
-      divisor:       100,
-      currency_code: "USD",
-    },
+    // Etsy v3 POST /shops/{id}/listings expects price as a plain float, not an object
+    price:            price,
     quantity:          listing.quantity,
     who_made:          listing.who_made,
     when_made:         listing.when_made,
@@ -323,6 +320,7 @@ function buildEtsyInventory(variations: VariationsConfig, basePrice: number): Re
           divisor:       100,
           currency_code: "USD",
         },
+        // Note: inventory endpoint uses price object, listing create uses float
         quantity:   (offering.quantity as number) ?? 1,
         is_enabled: (offering.enabled as boolean) !== false,
       }],

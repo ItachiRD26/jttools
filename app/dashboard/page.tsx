@@ -21,10 +21,11 @@ interface UsageData {
 }
 
 interface StoreConnection {
-  shopId:    string;
-  shopName:  string;
+  shopId:     string;
+  shopName:   string;
   etsyUserId: string;
   connectedAt?: { toDate: () => Date } | Date;
+  token_valid?: boolean;
 }
 
 interface UserData {
@@ -443,20 +444,33 @@ function DashboardContent() {
           ) : (
             <div className="space-y-2">
               {stores.map(store => (
-                <div key={store.shopId} className="flex items-center justify-between px-3 py-2.5 bg-white/3 border border-white/6 rounded-xl">
+                <div key={store.shopId} className={`flex items-center justify-between px-3 py-2.5 border rounded-xl transition-colors ${store.token_valid === false ? "bg-amber-500/5 border-amber-500/20" : "bg-white/3 border-white/6"}`}>
                   <div className="flex items-center gap-2.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${store.token_valid === false ? "bg-amber-400" : "bg-emerald-400"}`} />
                     <div>
                       <p className="text-sm text-white/80 font-medium">{store.shopName}</p>
                       <p className="text-[10px] font-mono text-white/30">shop_id: {store.shopId}</p>
+                      {store.token_valid === false && (
+                        <p className="text-[10px] text-amber-400 mt-0.5">Token expired — reconnect required</p>
+                      )}
                     </div>
                   </div>
-                  <button
-                    onClick={() => disconnectStore(store.shopId, store.shopName)}
-                    className="text-xs text-white/25 hover:text-red-400 transition-colors px-2 py-1"
-                  >
-                    Disconnect
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {store.token_valid === false && (
+                      <button
+                        onClick={connectStore}
+                        className="text-xs px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-400 rounded-lg transition-colors"
+                      >
+                        Reconnect
+                      </button>
+                    )}
+                    <button
+                      onClick={() => disconnectStore(store.shopId, store.shopName)}
+                      className="text-xs text-white/25 hover:text-red-400 transition-colors px-2 py-1"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -545,7 +559,7 @@ function DashboardContent() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-white/50">Daily limit</span>
                     <span className="text-sm font-mono text-white/70">
-                      {usage?.dailyLimit?.toLocaleString() ?? "10000"} req/day
+                      {usage?.dailyLimit?.toLocaleString() ?? "100"} req/day
                     </span>
                   </div>
                   {userData?.planId !== "free" && (

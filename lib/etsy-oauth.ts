@@ -166,21 +166,26 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
 
   // Refresh if expires in less than 5 minutes
   if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
-    const newTokens    = await refreshAccessToken(connection.refreshToken);
-    const newExpiresAt = new Date(Date.now() + newTokens.expires_in * 1000);
+    try {
+      const newTokens    = await refreshAccessToken(connection.refreshToken);
+      const newExpiresAt = new Date(Date.now() + newTokens.expires_in * 1000);
 
-    await db
-      .collection("etsyConnections")
-      .doc(userId)
-      .collection("shops")
-      .doc(String(shopId))
-      .update({
-        accessToken:  newTokens.access_token,
-        refreshToken: newTokens.refresh_token,
-        expiresAt:    newExpiresAt,
-      });
+      await db
+        .collection("etsyConnections")
+        .doc(userId)
+        .collection("shops")
+        .doc(String(shopId))
+        .update({
+          accessToken:  newTokens.access_token,
+          refreshToken: newTokens.refresh_token,
+          expiresAt:    newExpiresAt,
+        });
 
-    return newTokens.access_token;
+      return newTokens.access_token;
+    } catch (refreshErr) {
+      console.error(`[OAuth] Refresh failed for shop ${shopId}:`, refreshErr);
+      throw new Error(`STORE_TOKEN_EXPIRED:${shopId} — Re-connect your shop at jeterdev.tools/dashboard`);
+    }
   }
 
   return connection.accessToken;
