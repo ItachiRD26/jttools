@@ -545,7 +545,7 @@ function DashboardContent() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-white/50">Daily limit</span>
                     <span className="text-sm font-mono text-white/70">
-                      {usage?.dailyLimit?.toLocaleString() ?? "100"} req/day
+                      {usage?.dailyLimit?.toLocaleString() ?? "10000"} req/day
                     </span>
                   </div>
                   {userData?.planId !== "free" && (
