@@ -1,15 +1,17 @@
 // LOCATION: app/api/v1/uploads/presign/route.ts
 // POST /api/v1/uploads/presign
-// Returns a Vercel Blob upload URL that the client PUT to directly.
-// Uses generatePresignedUrl pattern — works with any HTTP client.
+// Returns a Firebase Storage signed upload URL.
+// Client PUTs directly to Firebase — bypasses ALL Vercel limits.
+// Supports up to 5GB per file (Firebase Storage limit).
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
-import { getDb } from "@/lib/firebase-admin";
+import { getDb, getAdminApp } from "@/lib/firebase-admin";
+import { getStorage } from "firebase-admin/storage";
 import { FieldValue } from "firebase-admin/firestore";
 import crypto from "crypto";
 
-export const maxDuration = 60;
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
 function cors() {
   return {
@@ -49,8 +51,27 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const uploadId  = `jt_${crypto.randomBytes(16).toString("hex")}`;
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  if (body.size && body.size > MAX_FILE_SIZE) {
+    return NextResponse.json(
+      { error: { code: "INVALID_REQUEST", status: 400, message: `File too large. Max is 100MB.` } },
+      { status: 400, headers: cors() }
+    );
+  }
+
+  const uploadId   = `jt_${crypto.randomBytes(16).toString("hex")}`;
+  const filePath   = `uploads/${uploadId}/${body.filename}`;
+  const expiresAt  = new Date(Date.now() + 30 * 60 * 1000); // 30 min to upload
+
+  // Generate Firebase Storage signed URL for direct PUT
+  getAdminApp();
+  const bucket = getStorage().bucket();
+  const file   = bucket.file(filePath);
+
+  const [signedUploadUrl] = await file.getSignedUrl({
+    action:      "write",
+    expires:     expiresAt,
+    contentType: body.content_type,
+  });
 
   // Save pending upload metadata
   await db.collection("uploads").doc(uploadId).set({
@@ -61,19 +82,17 @@ export async function POST(req: NextRequest) {
     size:        body.size ?? 0,
     contentType: body.content_type,
     type:        body.type ?? "image",
+    storagePath: filePath,
     status:      "pending",
     createdAt:   FieldValue.serverTimestamp(),
-    expiresAt,
+    expiresAt:   new Date(Date.now() + 24 * 60 * 60 * 1000),
     consumed:    false,
   });
-
-  // Build the upload URL pointing to our streaming endpoint
-  const uploadUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/v1/uploads/stream/${uploadId}`;
 
   return NextResponse.json(
     {
       upload_id:    uploadId,
-      upload_url:   uploadUrl,
+      upload_url:   signedUploadUrl,  // Direct Firebase Storage URL — no Vercel limit
       method:       "PUT",
       content_type: body.content_type,
       expires_in:   "30min",
