@@ -1,51 +1,60 @@
-// LOCATION: app/api/v1/stores/route.ts
-// GET /api/v1/stores
-// Returns all Etsy shops connected to this API key
+// LOCATION: app/api/debug/stores/route.ts
+// TEMPORARY — remove after debugging
+// GET /api/debug/stores?uid=USER_UID
 
 import { NextRequest, NextResponse } from "next/server";
-import { validateRequest } from "@/lib/api-auth";
-import { getDb } from "@/lib/firebase-admin";
+import { getAdminApp, getDb } from "@/lib/firebase-admin";
+import { getAuth } from "firebase-admin/auth";
 
 export async function GET(req: NextRequest) {
-  const apiKey = req.headers.get("x-api-key");
-  const auth   = await validateRequest(apiKey, "stores/list");
-
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const secret = req.nextUrl.searchParams.get("secret");
+  if (secret !== process.env.ADMIN_SECRET) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const db      = getDb();
-  const keySnap = await db.collection("apiKeys").doc(apiKey!).get();
-  const userId  = keySnap.data()?.userId as string;
+  getAdminApp();
+  const db = getDb();
 
-  if (!userId) {
-    return NextResponse.json(
-      { error: { code: "INTERNAL_ERROR", status: 500, message: "Could not identify user." } },
-      { status: 500 }
-    );
+  // Get all users with etsy connections
+  const connectionsSnap = await db.collection("etsyConnections").get();
+  const results = [];
+
+  for (const userDoc of connectionsSnap.docs) {
+    const userId = userDoc.id;
+    const shopsSnap = await db
+      .collection("etsyConnections")
+      .doc(userId)
+      .collection("shops")
+      .get();
+
+    for (const shopDoc of shopsSnap.docs) {
+      const data = shopDoc.data();
+      const expiresAt = data.expiresAt?.toDate?.() ?? null;
+      const now = new Date();
+
+      results.push({
+        userId,
+        shopId:       data.shopId,
+        shopName:     data.shopName,
+        etsyUserId:   data.etsyUserId,
+        hasAccessToken:  !!data.accessToken,
+        hasRefreshToken: !!data.refreshToken,
+        expiresAt:    expiresAt?.toISOString(),
+        isExpired:    expiresAt ? expiresAt < now : null,
+        expiresInMin: expiresAt ? Math.round((expiresAt.getTime() - now.getTime()) / 60000) : null,
+        connectedAt:  data.connectedAt?.toDate?.()?.toISOString(),
+      });
+    }
   }
 
-  const shopsSnap = await db
-    .collection("etsyConnections")
-    .doc(userId)
-    .collection("shops")
-    .get();
+  // Also check apiKeys to verify userId mapping
+  const apiKeysSnap = await db.collection("apiKeys")
+    .where("active", "==", true).limit(5).get();
+  const apiKeys = apiKeysSnap.docs.map(d => ({
+    key:    d.id.slice(0, 10) + "...",
+    userId: d.data().userId,
+    planId: d.data().planId,
+  }));
 
-  const stores = shopsSnap.docs.map(doc => {
-    const data = doc.data();
-    const expiresAt: Date = data.expiresAt?.toDate?.() ?? new Date(0);
-    return {
-      shop_id:      data.shopId,
-      shop_name:    data.shopName,
-      etsy_user_id: data.etsyUserId,
-      is_connected: true,
-      token_valid:  expiresAt > new Date(),
-      connected_at: data.connectedAt?.toDate?.()?.toISOString() ?? null,
-    };
-  });
-
-  return NextResponse.json({
-    count:  stores.length,
-    stores,
-  });
+  return NextResponse.json({ stores: results, apiKeys });
 }
