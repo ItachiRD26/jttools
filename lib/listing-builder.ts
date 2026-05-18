@@ -45,8 +45,9 @@ export interface ListingData {
   item_width?:      number;
   item_height?:     number;
   item_dimensions_unit?: string;
-  processing_min?:  number;
-  processing_max?:  number;
+  processing_min?:       number;
+  processing_max?:       number;
+  readiness_state_id?:   number; // Etsy v3 required for physical listings
 }
 
 export interface ImageItem { url: string; rank: number }
@@ -271,8 +272,35 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   if (listing.item_width)             payload.item_width          = listing.item_width;
   if (listing.item_height)            payload.item_height         = listing.item_height;
   if (listing.item_dimensions_unit)   payload.item_dimensions_unit = listing.item_dimensions_unit;
-  if (listing.processing_min)         payload.processing_min      = listing.processing_min;
-  if (listing.processing_max)         payload.processing_max      = listing.processing_max;
+  // Etsy v3 requires readiness_state_id for physical listings
+  // Map processing_min/max to the closest Etsy readiness state ID
+  // Etsy readiness state IDs:
+  //   1 = 1 day,  2 = 1-2 days,  3 = 1-3 days,  4 = 3-5 days
+  //   5 = 1-2 weeks,  6 = 2-4 weeks,  7 = 4-6 weeks,  8 = 6-8 weeks
+  // readiness_state_id is REQUIRED by Etsy for physical listings.
+  // Etsy IDs: 1=1day 2=1-2days 3=1-3days 4=3-5days 5=1-2wks 6=2-4wks 7=4-6wks 8=6-8wks
+  {
+    const min = listing.processing_min ?? 1;
+    const max = listing.processing_max ?? 3;
+    let readinessId = listing.readiness_state_id ?? 0;
+
+    if (!readinessId) {
+      if (max <= 1)       readinessId = 1;
+      else if (max <= 2)  readinessId = 2;
+      else if (max <= 3)  readinessId = 3;
+      else if (max <= 5)  readinessId = 4;
+      else if (max <= 14) readinessId = 5;
+      else if (max <= 28) readinessId = 6;
+      else if (max <= 42) readinessId = 7;
+      else                readinessId = 8;
+    }
+
+    // Always include — required by Etsy
+    payload.readiness_state_id = readinessId;
+    // Also set processing min/max for display purposes
+    if (listing.processing_min) payload.processing_min = min;
+    if (listing.processing_max) payload.processing_max = max;
+  }
   if (shopConfig.production_partner_ids?.length) {
     payload.production_partner_ids = shopConfig.production_partner_ids;
   }

@@ -407,7 +407,7 @@ function EndpointBlock({ ep }: { ep: Endpoint }) {
       </button>
       {open && (
         <div className="px-4 pb-4 border-t border-white/6 bg-white/1">
-          {ep.note && <InfoBox type="warn">{ep.note} <a href="#store-connection" className="underline opacity-80">See Store Connection →</a></InfoBox>}
+    {ep.note && <InfoBox type="warn">{ep.note} <a href="#store-connection" className="underline opacity-80">See Store Connection →</a></InfoBox>}
           {ep.params && ep.params.length > 0 && (
             <div className="mt-3">
               <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Parameters</p>
@@ -493,6 +493,10 @@ function Authentication() {
         <h1 className="text-2xl font-semibold tracking-tight text-white mb-3">Authentication</h1>
         <p className="text-sm text-white/50 leading-relaxed">All requests require an API key via the <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">x-api-key</code> header. Generate your key from the <a href="/dashboard" className="text-[#7F77DD] hover:underline">Dashboard</a>.</p>
       </div>
+      <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 text-xs text-amber-300/80">
+        <strong>readiness_state_id</strong> is required by Etsy for physical listings. JeterDev Tools derives it automatically from <code className="font-mono bg-white/6 px-1 rounded">processing_min</code>/<code className="font-mono bg-white/6 px-1 rounded">processing_max</code>. Defaults to <strong>3</strong> (1–3 business days) if omitted.
+      </div>
+
       <InfoBox type="warn">Never expose your API key in client-side code or public repositories. If compromised, rotate it immediately from your dashboard.</InfoBox>
       <CodeBlock code={`curl "https://jeterdev.tools/api/v1/listings/search?query=art" \\\n  -H "x-api-key: jt_a3f4b5c6d7e8f9..."`} />
       <div>
