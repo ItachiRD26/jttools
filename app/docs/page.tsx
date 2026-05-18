@@ -716,9 +716,9 @@ function ListingUploads() {
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3">3-step flow</p>
         <div className="space-y-2">
           {[
-            ["1", "POST /uploads/presign", "Get a signed upload URL + upload_id"],
-            ["2", "PUT file → upload_url",  "Client uploads directly to storage (no size limit)"],
-            ["3", "POST /uploads/confirm",  "Confirm the upload, get your jt-upload:// URL"],
+            ["1", "POST /uploads/presign",           "Get an upload_id and upload_url"],
+            ["2", "PUT file → upload_url",            "Upload binary directly — no size limit, works with curl or fetch"],
+            ["3", "POST /uploads/confirm",            "Get your jt-upload:// URL to use in /listings/create"],
           ].map(([n, t, d]) => (
             <div key={n} className="flex items-start gap-4 p-3 border border-white/6 rounded-xl">
               <span className="text-sm font-mono font-bold text-[#7F77DD] shrink-0 mt-0.5">{n}</span>
@@ -733,28 +733,33 @@ function ListingUploads() {
         <CodeBlock code={`curl -X POST "https://jeterdev.tools/api/v1/uploads/presign" \
   -H "x-api-key: jt_YOUR_KEY" \
   -H "Content-Type: application/json" \
-  -d '{
-    "filename":     "product-photo.jpg",
-    "content_type": "image/jpeg",
-    "size":         15728640,
-    "type":         "image"
-  }'`} />
+  -d '{"filename":"product-photo.jpg","content_type":"image/jpeg","size":15728640,"type":"image"}'`} />
         <CodeBlock code={`{
   "upload_id":  "jt_a1b2c3d4...",
-  "upload_url": "https://blob.vercel-storage.com/...",
-  "token":      "vercel_blob_client_...",
+  "upload_url": "https://jeterdev.tools/api/v1/uploads/stream/jt_a1b2c3d4...",
+  "method":     "PUT",
   "expires_in": "30min"
 }`} lang="json" />
       </div>
 
       <div>
-        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Step 2 — PUT file directly to upload_url</p>
-        <CodeBlock code={`// Client-side — use the upload_url returned from step 1
-const response = await fetch(upload_url, {
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Step 2 — PUT file to upload_url (any HTTP client)</p>
+        <CodeBlock code={`# curl
+curl -X PUT "https://jeterdev.tools/api/v1/uploads/stream/jt_a1b2c3d4..." \
+  -H "Content-Type: image/jpeg" \
+  --data-binary "@/path/to/photo.jpg"
+
+# fetch (browser / Node.js)
+await fetch(upload_url, {
   method:  "PUT",
   headers: { "Content-Type": "image/jpeg" },
-  body:    fileBlob,  // File object, up to 100MB
+  body:    fileBlob,   // File or Buffer, up to 50MB
 });`} />
+        <CodeBlock code={`{
+  "upload_id": "jt_a1b2c3d4...",
+  "status":    "ready",
+  "note":      "Now call POST /uploads/confirm"
+}`} lang="json" />
       </div>
 
       <div>
@@ -762,7 +767,7 @@ const response = await fetch(upload_url, {
         <CodeBlock code={`curl -X POST "https://jeterdev.tools/api/v1/uploads/confirm" \
   -H "x-api-key: jt_YOUR_KEY" \
   -H "Content-Type: application/json" \
-  -d '{ "upload_id": "jt_a1b2c3d4..." }'`} />
+  -d '{"upload_id":"jt_a1b2c3d4..."}'`} />
         <CodeBlock code={`{
   "url":          "jt-upload://jt_a1b2c3d4...",
   "upload_id":    "jt_a1b2c3d4...",
@@ -775,38 +780,44 @@ const response = await fetch(upload_url, {
       </div>
 
       <div>
-        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Use in POST /listings/create</p>
-        <CodeBlock code={`// Full flow example
-async function uploadAndCreate(imageFile: File) {
-  // 1. Presign
-  const presign = await fetch("/api/v1/uploads/presign", {
-    method: "POST",
-    headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ filename: imageFile.name, content_type: imageFile.type, size: imageFile.size }),
-  }).then(r => r.json());
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Full curl test (copy-paste ready)</p>
+        <CodeBlock code={`# 1. Presign
+PRESIGN=$(curl -s -X POST "https://jeterdev.tools/api/v1/uploads/presign" \
+  -H "x-api-key: jt_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"filename":"test.jpg","content_type":"image/jpeg","size":1000}')
 
-  // 2. Upload directly to storage
-  await fetch(presign.upload_url, { method: "PUT", body: imageFile });
+UPLOAD_ID=$(echo $PRESIGN | grep -o '"upload_id":"[^"]*"' | cut -d'"' -f4)
+UPLOAD_URL=$(echo $PRESIGN | grep -o '"upload_url":"[^"]*"' | cut -d'"' -f4)
 
-  // 3. Confirm
-  const confirmed = await fetch("/api/v1/uploads/confirm", {
-    method: "POST",
-    headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ upload_id: presign.upload_id }),
-  }).then(r => r.json());
+# 2. Upload file
+curl -X PUT "$UPLOAD_URL" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary "@photo.jpg"
 
-  // 4. Create listing using jt-upload:// URL
-  await fetch("/api/v1/listings/create", {
-    method: "POST",
-    headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      state: "publish",
-      shops: [...],
-      listing: { title: "AI Generated Mug", ... },
-      images: [{ url: confirmed.url, rank: 1 }]
-    }),
-  });
-}`} />
+# 3. Confirm
+curl -X POST "https://jeterdev.tools/api/v1/uploads/confirm" \
+  -H "x-api-key: jt_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"upload_id\":\"$UPLOAD_ID\"}"
+# → { "url": "jt-upload://jt_...", ... }`} />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Use jt-upload:// in POST /listings/create</p>
+        <CodeBlock code={`await fetch("/api/v1/listings/create", {
+  method: "POST",
+  headers: { "x-api-key": JT_KEY, "Content-Type": "application/json" },
+  body: JSON.stringify({
+    state: "publish",
+    shops: [...],
+    listing: { title: "AI Generated Mug", ... },
+    images: [
+      { url: "jt-upload://jt_a1b2c3d4...", rank: 1 },  // ← from confirm step
+      { url: "jt-upload://jt_b2c3d4e5...", rank: 2 },
+    ]
+  }),
+});`} />
       </div>
 
       <div>
