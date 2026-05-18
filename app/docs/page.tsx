@@ -844,7 +844,7 @@ await fetch(\`\${BASE}/listings/create\`, {
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Supported formats and limits</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {[
-            ["image",   "JPG, PNG, GIF, WebP", "Max 100MB · Max 20 per listing"],
+            ["image",   "JPG, PNG, GIF, WebP", "Max 100MB · No per-listing limit"],
             ["video",   "MP4, MOV, MPEG",       "Max 100MB · Max 1 per listing"],
             ["digital", "PDF, ZIP, SVG, PNG",   "Max 100MB · Max 10 per listing"],
           ].map(([type, formats, limit]) => (

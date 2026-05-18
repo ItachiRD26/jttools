@@ -133,8 +133,10 @@ export async function POST(req: NextRequest) {
 
   const result = await createListing(userId, apiKey!, body);
 
+  // Always return 200 with results[] so caller can inspect per-shop errors.
+  // Use 500 only for catastrophic failures (not per-shop Etsy rejections).
   return NextResponse.json(result, {
-    status: result.status === "failed" ? 500 : 200,
+    status: 200,
     headers: { ...corsHeaders(), ...rateLimitHeaders(auth) },
   });
 }

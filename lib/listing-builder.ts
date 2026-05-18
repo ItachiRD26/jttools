@@ -116,6 +116,7 @@ export interface ShopResult {
   activation_cost_usd?: number;
   warnings?:           { code: string; fields: string; reason: string }[];
   error?:              string;
+  details?:            unknown;
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────
@@ -170,8 +171,8 @@ export function validatePayload(body: CreateListingBody): ValidationError[] {
       if (!img.url) {
         errors.push({ field: `images[${i}].url`, reason: "Image URL is required" });
       }
-      if (!img.rank || img.rank < 1 || img.rank > 20) {
-        errors.push({ field: `images[${i}].rank`, reason: "Image rank must be between 1 and 20" });
+      if (!img.rank || img.rank < 1) {
+        errors.push({ field: `images[${i}].rank`, reason: "Image rank must be 1 or greater" });
       }
     });
   }
@@ -504,11 +505,15 @@ async function publishToShop(
   );
 
   if (!createRes.ok) {
-    const err = await createRes.json().catch(() => ({}));
+    const errText = await createRes.text();
+    let errBody: unknown;
+    try { errBody = JSON.parse(errText); } catch { errBody = errText; }
+    console.error(`[ListingBuilder] Etsy 400 for shop ${shopId}:`, JSON.stringify(errBody));
     return {
       shop_id: String(shopId),
       status:  "error",
-      error:   (err as { error?: string }).error ?? `Etsy listing creation failed (${createRes.status})`,
+      error:   (errBody as { error?: string })?.error ?? `Etsy listing creation failed (${createRes.status})`,
+      details: errBody,
     };
   }
 
