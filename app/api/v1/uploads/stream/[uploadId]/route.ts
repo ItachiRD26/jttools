@@ -55,7 +55,7 @@ export async function PUT(
     `uploads/${uploadId}/${data.filename}`,
     req.body!,
     {
-      access:      "public",
+      access:      "private",
       contentType,
       token:       process.env.BLOB_READ_WRITE_TOKEN,
     }
