@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
   const push = pushSnap.data()!;
 
   // Extract sale details — handle both Etsy payload shapes
-  const orderId   = payload.receipt_id ?? payload.order_id ?? payload.id ?? "?";
+  const orderId   = String(payload.receipt_id ?? payload.order_id ?? payload.id ?? "?");
   const amount    = parseFloat(String(
     payload.grandtotal ?? payload.total_price ?? payload.amount ?? 0
   ));
@@ -102,8 +102,9 @@ export async function POST(req: NextRequest) {
   const itemCount = parseInt(String(
     payload.transaction_count ?? payload.line_items_count ?? payload.item_count ?? 1
   ));
-  const buyerCity = payload.buyer_city_name as string | undefined
-    ?? payload.shipping_address?.city as string | undefined;
+  const shippingAddress = payload.shipping_address as Record<string, unknown> | undefined;
+  const buyerCity = (payload.buyer_city_name as string | undefined)
+    ?? (shippingAddress?.city as string | undefined);
 
   const notification = formatSaleNotification({
     shopName, orderId, amount, currency, itemCount, buyerCity,

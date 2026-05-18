@@ -670,6 +670,72 @@ function EndpointSection({ id }: { id: string }) {
   );
 }
 
+// ─── Notifications sections ───────────────────
+
+function NotificationsPushover() {
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Notifications</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-white mb-2">Pushover Sale Notifications</h1>
+        <p className="text-sm text-white/50 leading-relaxed">
+          Get instant push notifications on your phone every time a sale comes in. Uses <a href="https://pushover.net" target="_blank" rel="noopener noreferrer" className="text-[#7F77DD] hover:underline">Pushover</a> — $5 one-time purchase. Works across all your connected shops automatically.
+        </p>
+      </div>
+
+      <InfoBox>The Etsy webhook (<code className="font-mono text-xs bg-white/6 px-1 rounded">https://www.jeterdev.tools/api/webhooks/etsy</code>) is already registered. Just connect Pushover and sales flow through automatically for all shops.</InfoBox>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3">Setup — 2 steps</p>
+        <div className="space-y-2">
+          {[
+            ["1", "Get Pushover credentials", "Buy the app at pushover.net ($5 one-time). Copy your User Key. Create an Application and copy the App Token."],
+            ["2", "Connect to JeterDev Tools", "POST /notifications/pushover with your keys. A test notification fires immediately on your phone."],
+          ].map(([n, t, d]) => (
+            <div key={n} className="flex items-start gap-4 p-3 border border-white/6 rounded-xl">
+              <span className="text-sm font-mono font-bold text-[#7F77DD] shrink-0 mt-0.5">{n}</span>
+              <div><p className="text-sm font-medium text-white/80">{t}</p><p className="text-xs text-white/35 mt-0.5">{d}</p></div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">POST /api/v1/notifications/pushover</p>
+        <CodeBlock code={`curl -X POST "https://jeterdev.tools/api/v1/notifications/pushover" \\
+  -H "x-api-key: jt_YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "user_key":  "YOUR_PUSHOVER_USER_KEY",
+    "app_token": "YOUR_PUSHOVER_APP_TOKEN"
+  }'`} />
+        <CodeBlock code={`{ "success": true, "message": "Pushover connected. A test notification was sent to your device." }`} lang="json" />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">What the notification looks like</p>
+        <div className="bg-white/3 border border-white/6 rounded-xl p-4 font-mono text-sm space-y-1">
+          <p className="text-white/70 font-bold">💰 New sale — BambiCraftCo</p>
+          <p className="text-white/50 text-xs">Order #3456789012</p>
+          <p className="text-white/50 text-xs">$31.99 USD · 2 items · New York</p>
+          <p className="text-[#7F77DD] text-xs underline">View order on Etsy →</p>
+        </div>
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">GET — check status</p>
+        <CodeBlock code={`curl "https://jeterdev.tools/api/v1/notifications/pushover" -H "x-api-key: jt_YOUR_KEY"`} />
+        <CodeBlock code={`{ "configured": true, "app_token": "abcd..." }`} lang="json" />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">DELETE — disconnect</p>
+        <CodeBlock code={`curl -X DELETE "https://jeterdev.tools/api/v1/notifications/pushover" -H "x-api-key: jt_YOUR_KEY"`} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Listing Builder sections ─────────────────
 
 function ListingBuilderOverview() {
