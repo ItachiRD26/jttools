@@ -272,29 +272,11 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   if (listing.item_width)             payload.item_width          = listing.item_width;
   if (listing.item_height)            payload.item_height         = listing.item_height;
   if (listing.item_dimensions_unit)   payload.item_dimensions_unit = listing.item_dimensions_unit;
-  // Etsy v3 requires readiness_state_id for physical listings
-  // Map processing_min/max to the closest Etsy readiness state ID
-  // Etsy readiness state IDs:
-  //   1 = 1 day,  2 = 1-2 days,  3 = 1-3 days,  4 = 3-5 days
-  //   5 = 1-2 weeks,  6 = 2-4 weeks,  7 = 4-6 weeks,  8 = 6-8 weeks
-  // Etsy accepts EITHER readiness_state_id (saved shop state) OR processing_min+max (inline).
-  // We always use processing_min+max to avoid shop-specific ID lookup failures.
-  // If user passes shops[].processing_profile_id as a synthetic "1-3" composite, parse it.
-  {
-    let min = listing.processing_min ?? 1;
-    let max = listing.processing_max ?? 3;
-
-    // Parse synthetic processing_profile_id (e.g. "1-3") if passed at shop level
-    const profileId = shopConfig.processing_profile_id;
-    if (profileId && typeof profileId === "string" && profileId.includes("-")) {
-      const parts = String(profileId).split("-");
-      min = parseInt(parts[0]) || min;
-      max = parseInt(parts[1]) || max;
-    }
-
-    // Send inline — no readiness_state_id needed
-    payload.processing_min = min;
-    payload.processing_max = max;
+  // readiness_state_id is required by Etsy v3 for physical listings.
+  // We fetch the real ID from the shop's active listings in publishToShop()
+  // and inject it here via shopConfig._readiness_state_id.
+  if ((shopConfig as unknown as Record<string, unknown>)._readiness_state_id) {
+    payload.readiness_state_id = (shopConfig as unknown as Record<string, unknown>)._readiness_state_id;
   }
   if (shopConfig.production_partner_ids?.length) {
     payload.production_partner_ids = shopConfig.production_partner_ids;
@@ -493,6 +475,39 @@ async function setPersonalization(
   );
 }
 
+// ─── Fetch real readiness_state_id from shop's active listings ───────────────
+// Etsy v3 requires a shop-specific readiness_state_id — it cannot be set inline.
+// We grab it from any active listing on the shop.
+
+async function fetchReadinessStateId(
+  shopId: number,
+  accessToken: string
+): Promise<number> {
+  try {
+    const res = await fetch(
+      `${ETSY_BASE}/application/shops/${shopId}/listings/active?limit=1&fields=listing_id,readiness_state_id`,
+      {
+        headers: {
+          "x-api-key":     API_KEY(),
+          "Authorization": `Bearer ${accessToken}`,
+          "Accept":        "application/json",
+        },
+      }
+    );
+    if (!res.ok) return 3; // fallback
+    const data    = await res.json();
+    const listing = data.results?.[0];
+    const id      = listing?.readiness_state_id;
+    if (id && typeof id === "number") {
+      console.log(`[ListingBuilder] Got readiness_state_id=${id} from shop ${shopId}`);
+      return id;
+    }
+  } catch (err) {
+    console.warn(`[ListingBuilder] Could not fetch readiness_state_id for shop ${shopId}:`, err);
+  }
+  return 3; // default: 1-3 business days
+}
+
 // ─── Publish to a single shop ─────────────────────────────────────────────────
 
 async function publishToShop(
@@ -516,9 +531,17 @@ async function publishToShop(
     };
   }
 
-  // 1. Create the listing on Etsy
-  const etsyPayload = buildEtsyListingPayload(shopConfig, body.listing);
-  const createRes   = await etsyRequest(
+  // 1. Fetch real readiness_state_id from this shop's active listings
+  const readinessStateId = await fetchReadinessStateId(shopId, accessToken);
+  const shopConfigWithReadiness = {
+    ...shopConfig,
+    _readiness_state_id: readinessStateId,
+  };
+
+  // Build the Etsy listing payload
+  const etsyPayload = buildEtsyListingPayload(shopConfigWithReadiness, body.listing);
+  console.log("[ListingBuilder] Payload readiness_state_id:", (etsyPayload as Record<string,unknown>).readiness_state_id);
+  const createRes = await etsyRequest(
     "POST",
     `/application/shops/${shopId}/listings`,
     accessToken,

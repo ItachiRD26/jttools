@@ -1,12 +1,12 @@
 // LOCATION: app/api/v1/stores/[shopId]/processing-profiles/live/route.ts
 // GET /api/v1/stores/{shopId}/processing-profiles/live
 //
-// Processing profiles = unique {processing_min, processing_max} combinations
-// used across active listings. Etsy has no standalone "processing profiles"
-// endpoint — these are derived by scanning active listings and deduplicating.
+// Returns real readiness_state_id values scraped from active listings.
+// Etsy v3 requires a shop-specific readiness_state_id on POST /listings create —
+// it cannot be set inline via processing_min/max. The ID must exist on that shop.
 //
-// NOTE: Production partners (external manufacturers) are a separate concept.
-// See GET /stores/{shopId}/production-partners/live for those.
+// Use readiness_state_id from this response in shops[0].processing_profile_id.
+// JeterDev Tools resolves it automatically when publishing.
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
@@ -40,10 +40,9 @@ export async function GET(
     );
   }
 
-  // Fetch active listings to extract unique processing time combinations.
-  // Etsy has no standalone "processing profiles" endpoint — we derive them.
+  // Fetch active listings to extract unique readiness_state_id values
   const res = await fetch(
-    `${ETSY_BASE}/application/shops/${shopId}/listings/active?limit=100&fields=listing_id,processing_min,processing_max`,
+    `${ETSY_BASE}/application/shops/${shopId}/listings/active?limit=100&fields=listing_id,readiness_state_id,processing_min,processing_max`,
     {
       headers: {
         "x-api-key":     API_KEY(),
@@ -73,42 +72,37 @@ export async function GET(
   const data     = await res.json();
   const listings = data.results ?? [];
 
-  // Deduplicate processing time combinations
-  const seen = new Set<string>();
-  const profiles: {
-    processing_profile_id: string;
-    processing_min: number;
-    processing_max: number;
+  // Deduplicate by readiness_state_id — these are the REAL Etsy IDs for this shop
+  const seen = new Map<number, {
+    readiness_state_id:            number;
+    processing_min:                number;
+    processing_max:                number;
     processing_days_display_label: string;
-  }[] = [];
+  }>();
 
   for (const listing of listings) {
+    const id  = listing.readiness_state_id;
     const min = listing.processing_min ?? 1;
     const max = listing.processing_max ?? 3;
-    const key = `${min}-${max}`;
-
-    if (!seen.has(key)) {
-      seen.add(key);
-      profiles.push({
-        // Synthetic ID — stable key for this min/max combination
-        processing_profile_id:         key,
-        processing_min:                 min,
-        processing_max:                 max,
-        processing_days_display_label:  min === max
+    if (id && !seen.has(id)) {
+      seen.set(id, {
+        readiness_state_id:            id,
+        processing_min:                min,
+        processing_max:                max,
+        processing_days_display_label: min === max
           ? `${min} business day${min === 1 ? "" : "s"}`
           : `${min}–${max} business days`,
       });
     }
   }
 
-  // Sort by processing_min
-  profiles.sort((a, b) => a.processing_min - b.processing_min);
+  const profiles = Array.from(seen.values()).sort((a, b) => a.processing_min - b.processing_min);
 
   return NextResponse.json({
     shop_id:             shopId,
     fetched_at:          new Date().toISOString(),
     count:               profiles.length,
     processing_profiles: profiles,
-    note: "Derived from active listings. Use processing_min and processing_max when creating listings — Etsy does not have a standalone processing profiles endpoint.",
+    note: "Use readiness_state_id as shops[0].processing_profile_id when creating listings. JeterDev Tools resolves it automatically.",
   });
 }
