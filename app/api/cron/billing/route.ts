@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
   // Get all paid users
   const usersSnap = await db.collection(Collections.USERS)
-    .where("planId", "in", ["starter", "pro"])
+    .where("planId", "==", "pro")
     .get();
 
   for (const doc of usersSnap.docs) {

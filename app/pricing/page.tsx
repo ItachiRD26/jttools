@@ -11,53 +11,35 @@ const auth = getAuth(app);
 
 const PLANS = [
   {
-    id: "free",
-    name: "Free",
-    price: 0,
-    daily: "100 req/day",
-    description: "Try the API at no cost",
-    border: "border-white/8",
+    id:          "free",
+    name:        "Free",
+    price:       0,
+    daily:       "500 calls / day",
+    description: "1 req/sec · Public endpoints",
+    border:      "border-white/8",
+    badge:       null,
     features: [
-      "100 requests / day",
-      "6 endpoints",
-      "listings/search & get",
-      "listings/active",
-      "shops/get",
-      "categories/list",
-      "search/listings",
+      "500 API calls per day",
+      "Public listings & shop data",
+      "Search, categories, images",
+      "No credit card required",
     ],
   },
   {
-    id: "starter",
-    name: "Starter",
-    price: 25,
-    daily: "2,000 req/day",
-    description: "For growing projects",
-    border: "border-white/8",
+    id:          "pro",
+    name:        "Pro",
+    price:       50,
+    daily:       "30,000 calls / day",
+    description: "10 req/sec · All endpoints",
+    border:      "border-[#7F77DD]",
+    badge:       "Most Popular",
     features: [
-      "2,000 requests / day",
-      "19 read endpoints",
-      "All Listings (read)",
-      "Shops · Search",
-      "Categories · Images",
-      "Users · Policies",
-    ],
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    price: 50,
-    daily: "50,000 req/day",
-    description: "Full access, no limits",
-    border: "border-[#7F77DD]",
-    badge: "Most popular",
-    features: [
-      "50,000 requests / day",
-      "All 38+ endpoints",
-      "Full write access",
-      "Create & update listings",
-      "Manage shipping profiles",
-      "Upload & delete images",
+      "30,000 API calls per day",
+      "Full endpoint access",
+      "POST /listings/create (multi-shop)",
+      "Uploads up to 100MB",
+      "OAuth multi-store management",
+      "Priority support",
     ],
   },
 ];
@@ -191,7 +173,7 @@ function PricingContent() {
         )}
 
         {/* Plans */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 max-w-3xl mx-auto">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 max-w-2xl mx-auto">
           {PLANS.map((plan) => (
             <div
               key={plan.id}

@@ -34,6 +34,12 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    label: "Notifications",
+    items: [
+      { id: "notifications-pushover", title: "Pushover Sales", count: 3 },
+    ],
+  },
+  {
     label: "Stores",
     items: [
       { id: "stores-list",      title: "List Stores",        count: 1 },
@@ -1154,6 +1160,7 @@ export default function DocsPage() {
       case "rate-limits":      return <RateLimits />;
       case "store-connection": return <StoreConnection />;
       case "errors":           return <Errors />;
+      case "notifications-pushover": return <NotificationsPushover />;
       case "listing-builder":  return <ListingBuilderOverview />;
       case "lb-uploads":       return <ListingUploads />;
       case "lb-create":        return <ListingCreate />;
