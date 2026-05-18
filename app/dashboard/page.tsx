@@ -125,7 +125,6 @@ function DashboardContent() {
       if (etsyStatus === "connected") {
         setPaymentMsg(`✓ "${etsyShop}" connected successfully!`);
         router.replace("/dashboard");
-        fetchStores(u);
       } else if (etsyStatus === "cancelled") {
         setPaymentMsg("Store connection cancelled.");
         router.replace("/dashboard");
@@ -138,6 +137,9 @@ function DashboardContent() {
         router.replace("/dashboard");
       }
 
+      // Always load stores on auth — regardless of URL params
+      fetchStores(u);
+
     });
     return () => unsub();
   }, [router, searchParams, fetchUsage, capturePaypalPayment]);
@@ -145,17 +147,22 @@ function DashboardContent() {
 
 
 
-  async function fetchStores(u: typeof user) {
+  async function fetchStores(u: typeof user, retries = 3) {
     if (!u) return;
     setLoadingStores(true);
     try {
-      const token = await u.getIdToken();
+      const token = await u.getIdToken(true); // force refresh token
       const res   = await fetch("/api/auth/etsy/stores", {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data = await res.json();
-        setStores(data.stores ?? []);
+        const stores = data.stores ?? [];
+        setStores(stores);
+        // If no stores but we just connected, retry a couple times
+        if (stores.length === 0 && retries > 0) {
+          setTimeout(() => fetchStores(u, retries - 1), 1500);
+        }
       }
     } catch { /* silent */ }
     finally { setLoadingStores(false); }
