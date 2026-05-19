@@ -307,7 +307,11 @@ function buildEtsyInventory(variations: VariationsConfig, basePrice: number): Re
       const value = offering[key] as string;
       return {
         property_id:   prop.property_id,
-        value_ids:     [0], // Etsy assigns
+        // Custom variation properties (513=Flowers, 514=Color) use free-text values.
+        // value_ids must be [] (empty) — sending [0] causes Etsy 404 "Resource not found".
+        // Standard taxonomy properties may have real value_ids but we don't have them here,
+        // so we always send [] and let Etsy match by values[] text.
+        value_ids:     [],
         values:        [value],
         property_name: prop.name,
         ...(prop.scale_id ? { scale_id: prop.scale_id } : {}),
