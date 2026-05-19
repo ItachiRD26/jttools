@@ -287,7 +287,7 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
 
 // ─── Build Etsy inventory from variations ────────────────────────────────────
 
-function buildEtsyInventory(variations: VariationsConfig, basePrice: number): Record<string, unknown> {
+function buildEtsyInventory(variations: VariationsConfig, basePrice: number, readinessStateId = 3): Record<string, unknown> {
   const { properties, offerings } = variations;
 
   // Build property name → property info lookup
@@ -324,9 +324,11 @@ function buildEtsyInventory(variations: VariationsConfig, basePrice: number): Re
       sku:        (offering.sku as string) ?? "",
       offerings: [{
         // Inventory PUT requires plain float — NOT the {amount, divisor} object Etsy returns on reads
-        price:      offeringPrice,
-        quantity:   (offering.quantity as number) ?? 1,
-        is_enabled: (offering.enabled as boolean) !== false,
+        price:              offeringPrice,
+        quantity:           (offering.quantity as number) ?? 1,
+        is_enabled:         (offering.enabled as boolean) !== false,
+        // Required on every offering — use per-offering value if provided, else shop default
+        readiness_state_id: (offering.processing_profile_id as number) || readinessStateId,
       }],
       property_values: propertyValues,
     };
@@ -591,7 +593,7 @@ async function publishToShop(
   // (b) Etsy eventual consistency: new listings return 404 for ~1-3s after create
   //     Retry with backoff — same approach ETO used.
   if (body.variations?.properties?.length) {
-    const inventory = buildEtsyInventory(body.variations, body.listing.price);
+    const inventory = buildEtsyInventory(body.variations, body.listing.price, readinessStateId);
     const INVENTORY_URL = `/application/listings/${listingId}/inventory`;
 
     let invRes: Response | null = null;
