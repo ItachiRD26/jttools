@@ -4,7 +4,7 @@
 import { getDb, Collections } from "./firebase-admin";
 import { createApiKey, revokeApiKey } from "./api-auth";
 import { sendEmail } from "./mailer";
-import { PLANS, getPlan } from "./plans";
+import { getPlan } from "./plans";
 import { FieldValue } from "firebase-admin/firestore";
 
 export interface UserBillingDoc {
@@ -15,22 +15,23 @@ export interface UserBillingDoc {
   nextBillingDate?: FirebaseFirestore.Timestamp;
   planActivatedAt?: FirebaseFirestore.Timestamp;
   apiKey?: string;
+  paypalSubscriptionId?: string; // antes era paypalOrderId (pago único)
 }
 
-// ─── Activate plan after PayPal payment ──────────────────────────────────────
-export async function activatePlan(uid: string, planId: string, orderId: string) {
+// ─── Activate plan after PayPal subscription approval ────────────────────────
+export async function activatePlan(uid: string, planId: string, subscriptionId: string) {
   const db = getDb();
   const plan = getPlan(planId);
 
-  // Revoke old keys
+  // Revocar llaves activas anteriores
   const oldKeys = await db.collection(Collections.API_KEYS)
     .where("userId", "==", uid).where("active", "==", true).get();
   await Promise.all(oldKeys.docs.map((d) => revokeApiKey(d.id)));
 
-  // New key
+  // Nueva API key
   const newApiKey = await createApiKey(uid, planId);
 
-  // Next billing = 30 days from now
+  // Próxima fecha de facturación = 30 días
   const nextBillingDate = new Date();
   nextBillingDate.setDate(nextBillingDate.getDate() + 30);
 
@@ -38,12 +39,15 @@ export async function activatePlan(uid: string, planId: string, orderId: string)
     planId,
     planStatus: "active",
     apiKey: newApiKey,
-    paypalOrderId: orderId,
+    paypalSubscriptionId: subscriptionId, // guardamos el subscriptionId (no el orderId)
     planActivatedAt: FieldValue.serverTimestamp(),
     nextBillingDate,
+    // limpiar campos de estado anterior
+    pastDueSince: FieldValue.delete(),
+    cancelledAt: FieldValue.delete(),
   });
 
-  // Send confirmation email
+  // Email de confirmación
   const userSnap = await db.collection(Collections.USERS).doc(uid).get();
   const user = userSnap.data() as UserBillingDoc;
   await sendEmail({
@@ -58,14 +62,14 @@ export async function activatePlan(uid: string, planId: string, orderId: string)
   return newApiKey;
 }
 
-// ─── Cancel plan (user triggered) ────────────────────────────────────────────
+// ─── Cancel plan (user triggered or webhook CANCELLED) ───────────────────────
 export async function cancelPlan(uid: string) {
   const db = getDb();
   const userSnap = await db.collection(Collections.USERS).doc(uid).get();
   const user = userSnap.data() as UserBillingDoc;
   const oldPlan = getPlan(user.planId);
 
-  // Revoke current keys and create free key
+  // Revocar llaves actuales y crear llave free
   const oldKeys = await db.collection(Collections.API_KEYS)
     .where("userId", "==", uid).where("active", "==", true).get();
   await Promise.all(oldKeys.docs.map((d) => revokeApiKey(d.id)));
@@ -73,9 +77,10 @@ export async function cancelPlan(uid: string) {
 
   await db.collection(Collections.USERS).doc(uid).update({
     planId: "free",
-    planStatus: "free",
+    planStatus: "cancelled",
     apiKey: freeKey,
     nextBillingDate: FieldValue.delete(),
+    paypalSubscriptionId: FieldValue.delete(),
     cancelledAt: FieldValue.serverTimestamp(),
   });
 
@@ -87,7 +92,7 @@ export async function cancelPlan(uid: string) {
   });
 }
 
-// ─── Downgrade to free (non-payment) ─────────────────────────────────────────
+// ─── Downgrade to free (non_payment after grace period) ──────────────────────
 export async function downgradePlan(uid: string, reason: "non_payment" | "cancelled") {
   const db = getDb();
   const userSnap = await db.collection(Collections.USERS).doc(uid).get();
@@ -103,6 +108,7 @@ export async function downgradePlan(uid: string, reason: "non_payment" | "cancel
     planStatus: "free",
     apiKey: freeKey,
     nextBillingDate: FieldValue.delete(),
+    paypalSubscriptionId: FieldValue.delete(),
   });
 
   await sendEmail({
