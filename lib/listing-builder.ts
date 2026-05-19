@@ -591,25 +591,39 @@ async function publishToShop(
   }
 
   // 3. Set inventory/variations
+  // Two bugs fixed:
+  // (a) Wrong URL: must be /application/listings/{id}/inventory (no /shops/ prefix)
+  // (b) Etsy eventual consistency: new listings return 404 for ~1-3s after create
+  //     Retry with backoff — same approach ETO used.
   if (body.variations?.properties?.length) {
     const inventory = buildEtsyInventory(body.variations, body.listing.price);
-    const invRes = await etsyRequest(
-      "PUT",
-      `/application/shops/${shopId}/listings/${listingId}/inventory`,
-      accessToken,
-      inventory
-    );
-    if (!invRes.ok) {
-      const invErrText = await invRes.text();
+    const INVENTORY_URL = `/application/listings/${listingId}/inventory`;
+
+    let invRes: Response | null = null;
+    const delays = [1000, 2000, 3000];
+
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, delays[attempt - 1]));
+        console.log(`[ListingBuilder] Inventory PUT retry ${attempt} for listing ${listingId}`);
+      }
+      invRes = await etsyRequest("PUT", INVENTORY_URL, accessToken, inventory);
+      console.log(`[ListingBuilder] Inventory PUT attempt ${attempt + 1}: ${invRes.status}`);
+      if (invRes.ok) break;
+      if (invRes.status !== 404) break; // only retry on 404
+    }
+
+    if (!invRes || !invRes.ok) {
+      const invErrText = await invRes!.text();
       let invErrBody: unknown;
       try { invErrBody = JSON.parse(invErrText); } catch { invErrBody = invErrText; }
-      console.error(`[ListingBuilder] Inventory PUT failed for shop ${shopId} listing ${listingId} (${invRes.status}):`, JSON.stringify(invErrBody));
+      console.error(`[ListingBuilder] Inventory PUT failed for listing ${listingId}:`, JSON.stringify(invErrBody));
       warnings.push({
         code:       "INVENTORY_SET_FAILED",
         fields:     "variations",
-        reason:     "Failed to set inventory/variations",
+        reason:     `Inventory PUT failed after ${delays.length + 1} attempts`,
         etsy_error:  invErrBody,
-        etsy_status: invRes.status,
+        etsy_status: invRes!.status,
         inventory_payload_sent: inventory,
       } as unknown as { code: string; fields: string; reason: string });
     }
