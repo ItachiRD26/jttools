@@ -221,20 +221,43 @@ async function etsyRequest(
   method: string,
   path: string,
   accessToken: string,
-  body?: unknown
+  body?: unknown,
+  contentType: "json" | "form" = "json"
 ): Promise<Response> {
   const headers: Record<string, string> = {
     "x-api-key":     API_KEY(),
     "Authorization": `Bearer ${accessToken}`,
     "Accept":        "application/json",
   };
-  if (body && !(body instanceof FormData)) {
+
+  let bodyPayload: string | FormData | undefined;
+
+  if (body instanceof FormData) {
+    // Multipart — no Content-Type header (browser sets boundary)
+    bodyPayload = body;
+  } else if (body && contentType === "form") {
+    // Etsy listing create/update requires application/x-www-form-urlencoded
+    headers["Content-Type"] = "application/x-www-form-urlencoded";
+    const flat = body as Record<string, unknown>;
+    const params = new URLSearchParams();
+    for (const [key, val] of Object.entries(flat)) {
+      if (val === undefined || val === null) continue;
+      if (Array.isArray(val)) {
+        val.forEach(v => params.append(key, String(v)));
+      } else {
+        params.append(key, String(val));
+      }
+    }
+    bodyPayload = params.toString();
+  } else if (body) {
     headers["Content-Type"] = "application/json";
+    bodyPayload = JSON.stringify(body);
   }
+
   return fetch(`${ETSY_BASE}${path}`, {
     method,
     headers,
-    body: body ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined,
+    body: bodyPayload,
   });
 }
 
@@ -272,12 +295,11 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   if (listing.item_width)             payload.item_width          = listing.item_width;
   if (listing.item_height)            payload.item_height         = listing.item_height;
   if (listing.item_dimensions_unit)   payload.item_dimensions_unit = listing.item_dimensions_unit;
-  // readiness_state_id is required by Etsy v3 for physical listings.
-  // We fetch the real ID from the shop's active listings in publishToShop()
-  // and inject it here via shopConfig._readiness_state_id.
-  if ((shopConfig as unknown as Record<string, unknown>)._readiness_state_id) {
-    payload.readiness_state_id = (shopConfig as unknown as Record<string, unknown>)._readiness_state_id;
-  }
+  // processing_min/max are the correct INPUT fields for Etsy createDraftListing.
+  // readiness_state_id is an OUTPUT field only per Etsy docs.
+  // We still need readiness_state_id on inventory PUT offerings (different endpoint).
+  if (listing.processing_min) payload.processing_min = listing.processing_min;
+  if (listing.processing_max) payload.processing_max = listing.processing_max;
   if (shopConfig.production_partner_ids?.length) {
     payload.production_partner_ids = shopConfig.production_partner_ids;
   }
@@ -480,13 +502,30 @@ async function setPersonalization(
 // Etsy v3 requires a shop-specific readiness_state_id — it cannot be set inline.
 // We grab it from any active listing on the shop.
 
+// Map processing_min/max to Etsy's standard readiness_state_id
+// These are universal IDs — not shop-specific
+function processingToReadinessId(min: number, max: number): number {
+  if (max <= 1)  return 1; // Same day / 1 day
+  if (max <= 2)  return 2; // 1-2 days
+  if (max <= 3)  return 3; // 1-3 days
+  if (max <= 5)  return 4; // 3-5 days
+  if (max <= 7)  return 5; // 1-2 weeks (up to 7 days)
+  if (max <= 14) return 6; // 1-2 weeks
+  if (max <= 21) return 7; // 2-3 weeks
+  if (max <= 30) return 8; // 3-4 weeks
+  return 9;                // longer
+}
+
 async function fetchReadinessStateId(
   shopId: number,
-  accessToken: string
+  accessToken: string,
+  processingMin?: number,
+  processingMax?: number,
 ): Promise<number> {
+  // First try: get from an active listing on the shop (most reliable)
   try {
     const res = await fetch(
-      `${ETSY_BASE}/application/shops/${shopId}/listings/active?limit=1&fields=listing_id,readiness_state_id`,
+      `${ETSY_BASE}/application/shops/${shopId}/listings/active?limit=5&fields=listing_id,readiness_state_id`,
       {
         headers: {
           "x-api-key":     API_KEY(),
@@ -495,18 +534,34 @@ async function fetchReadinessStateId(
         },
       }
     );
-    if (!res.ok) return 3; // fallback
-    const data    = await res.json();
-    const listing = data.results?.[0];
-    const id      = listing?.readiness_state_id;
-    if (id && typeof id === "number") {
-      console.log(`[ListingBuilder] Got readiness_state_id=${id} from shop ${shopId}`);
-      return id;
+    if (res.ok) {
+      const data     = await res.json();
+      const listings = data.results ?? [];
+      // Find first listing that has a valid readiness_state_id
+      for (const listing of listings) {
+        const id = listing?.readiness_state_id;
+        if (id && typeof id === "number" && id > 0) {
+          console.log(`[ListingBuilder] Got readiness_state_id=${id} from active listing on shop ${shopId}`);
+          return id;
+        }
+      }
     }
   } catch (err) {
-    console.warn(`[ListingBuilder] Could not fetch readiness_state_id for shop ${shopId}:`, err);
+    console.warn(`[ListingBuilder] Could not fetch readiness_state_id from listings:`, err);
   }
-  return 3; // default: 1-3 business days
+
+  // Second try: map from processing_min/max provided in the request
+  if (processingMin !== undefined || processingMax !== undefined) {
+    const min = processingMin ?? 1;
+    const max = processingMax ?? 3;
+    const id  = processingToReadinessId(min, max);
+    console.log(`[ListingBuilder] Derived readiness_state_id=${id} from processing_min=${min} processing_max=${max}`);
+    return id;
+  }
+
+  // Final fallback
+  console.warn(`[ListingBuilder] Using readiness_state_id=4 (3-5 days) as fallback for shop ${shopId}`);
+  return 4;
 }
 
 // ─── Publish to a single shop ─────────────────────────────────────────────────
@@ -542,11 +597,13 @@ async function publishToShop(
   // Build the Etsy listing payload
   const etsyPayload = buildEtsyListingPayload(shopConfigWithReadiness, body.listing);
   console.log("[ListingBuilder] Payload readiness_state_id:", (etsyPayload as Record<string,unknown>).readiness_state_id);
+  // Etsy createDraftListing requires application/x-www-form-urlencoded
   const createRes = await etsyRequest(
     "POST",
     `/application/shops/${shopId}/listings`,
     accessToken,
-    etsyPayload
+    etsyPayload,
+    "form"
   );
 
   if (!createRes.ok) {
@@ -675,7 +732,7 @@ export async function createListing(
   apiKey: string,
   body: CreateListingBody
 ): Promise<Record<string, unknown>> {
-  const db = getDb() as FirebaseFirestore.Firestore;
+  const db = getDb() as Firestore;
 
   // Draft — no Etsy calls
   if (body.state === "draft") {
