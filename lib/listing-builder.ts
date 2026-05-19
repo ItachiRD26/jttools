@@ -596,7 +596,18 @@ async function publishToShop(
       inventory
     );
     if (!invRes.ok) {
-      warnings.push({ code: "INVENTORY_SET_FAILED", fields: "variations", reason: "Failed to set inventory/variations" });
+      const invErrText = await invRes.text();
+      let invErrBody: unknown;
+      try { invErrBody = JSON.parse(invErrText); } catch { invErrBody = invErrText; }
+      console.error(`[ListingBuilder] Inventory PUT failed for shop ${shopId} listing ${listingId} (${invRes.status}):`, JSON.stringify(invErrBody));
+      warnings.push({
+        code:       "INVENTORY_SET_FAILED",
+        fields:     "variations",
+        reason:     "Failed to set inventory/variations",
+        etsy_error:  invErrBody,
+        etsy_status: invRes.status,
+        inventory_payload_sent: inventory,
+      } as unknown as { code: string; fields: string; reason: string });
     }
   }
 
