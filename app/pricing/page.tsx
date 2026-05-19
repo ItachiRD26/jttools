@@ -47,12 +47,11 @@ const PLANS = [
 function PricingContent() {
   const router       = useRouter();
   const searchParams = useSearchParams();
-  const [user, setUser]             = useState<User | null>(null);
-  const [checking, setChecking]     = useState(true);
+  const [user, setUser]               = useState<User | null>(null);
+  const [checking, setChecking]       = useState(true);
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
-  const [error, setError]           = useState("");
+  const [error, setError]             = useState("");
 
-  // Check for pending plan after login redirect
   const pendingPlan = searchParams.get("plan");
 
   useEffect(() => {
@@ -60,11 +59,10 @@ function PricingContent() {
       setUser(u);
       setChecking(false);
 
-      // If user just logged in and has a pending plan, auto-trigger payment
       if (u && pendingPlan) {
         const plan = PLANS.find((p) => p.id === pendingPlan);
         if (plan && plan.price > 0) {
-          triggerPayment(u, plan);
+          triggerSubscription(u, plan);
         } else if (plan?.price === 0) {
           router.replace("/dashboard");
         }
@@ -73,17 +71,25 @@ function PricingContent() {
     return () => unsub();
   }, [router, pendingPlan]);
 
-  async function triggerPayment(currentUser: User, plan: typeof PLANS[0]) {
+  async function triggerSubscription(currentUser: User, plan: typeof PLANS[0]) {
     setLoadingPlan(plan.id);
+    setError("");
     try {
       const token = await currentUser.getIdToken();
-      const res = await fetch("/api/paypal/create-order", {
+      const res = await fetch("/api/paypal/create-subcription", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ planId: plan.id }),
       });
-      if (!res.ok) throw new Error("Failed to create PayPal order");
-      const { approvalUrl } = await res.json();
+      if (!res.ok) throw new Error("Failed to create PayPal subscription");
+      const { subscriptionId, approvalUrl } = await res.json();
+
+      // Guardar subscriptionId en sessionStorage para usarlo al volver
+      if (subscriptionId) {
+        sessionStorage.setItem("pending_subscription_id", subscriptionId);
+        sessionStorage.setItem("pending_plan_id", plan.id);
+      }
+
       if (approvalUrl) window.location.href = approvalUrl;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -95,19 +101,17 @@ function PricingContent() {
   async function handleSelect(plan: typeof PLANS[0]) {
     setError("");
 
-    // Not logged in → redirect to auth with plan saved in URL
     if (!user) {
       router.push(`/auth?redirect=/pricing&plan=${plan.id}`);
       return;
     }
 
-    // Free plan → dashboard
     if (plan.price === 0) {
       router.push("/dashboard");
       return;
     }
 
-    await triggerPayment(user, plan);
+    await triggerSubscription(user, plan);
   }
 
   if (checking) {
@@ -134,7 +138,7 @@ function PricingContent() {
           <img src="/logo.webp" alt="JeterDev Tools" className="h-16 w-auto" />
         </a>
         <div className="flex items-center gap-5">
-          <a href="/docs"      className="text-sm text-white/50 hover:text-white transition-colors">Docs</a>
+          <a href="/docs" className="text-sm text-white/50 hover:text-white transition-colors">Docs</a>
           {user ? (
             <a href="/dashboard" className="text-sm px-4 py-1.5 bg-[#7F77DD] hover:bg-[#6B62CC] text-white rounded-lg transition-colors font-medium">
               Dashboard
@@ -156,7 +160,6 @@ function PricingContent() {
           </p>
         </div>
 
-        {/* Not logged in banner */}
         {!user && (
           <div className="max-w-3xl mx-auto mb-8 flex items-center gap-3 px-4 py-3 bg-[#7F77DD]/10 border border-[#7F77DD]/20 rounded-xl text-sm text-[#7F77DD]">
             <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -215,7 +218,7 @@ function PricingContent() {
                   ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   : plan.price === 0
                   ? "Get started free"
-                  : user ? "Pay with PayPal" : "Select plan"}
+                  : user ? "Subscribe with PayPal" : "Select plan"}
               </button>
             </div>
           ))}
@@ -225,12 +228,11 @@ function PricingContent() {
           All plans include: CORS support · JSON responses · x-api-key auth · daily reset at 00:00 UTC
         </p>
 
-        {/* Mini FAQ */}
         <div className="max-w-3xl mx-auto mt-16 grid grid-cols-1 md:grid-cols-3 gap-6">
           {[
             ["When do limits reset?", "Every day at midnight UTC. Your counter goes back to zero automatically."],
-            ["Can I upgrade anytime?", "Yes. Pay with PayPal and your new limits activate instantly."],
-            ["What if I need more?", "Pro covers 50,000 req/day. Need a custom limit? Contact us."],
+            ["Can I cancel anytime?", "Yes. Cancel from your dashboard and you'll be downgraded to Free immediately."],
+            ["What if I need more?", "Pro covers 30,000 req/day. Need a custom limit? Contact us."],
           ].map(([q, a]) => (
             <div key={q}>
               <p className="text-sm font-medium text-white/70 mb-1">{q}</p>
