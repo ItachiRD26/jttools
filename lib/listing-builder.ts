@@ -323,12 +323,8 @@ function buildEtsyInventory(variations: VariationsConfig, basePrice: number): Re
     return {
       sku:        (offering.sku as string) ?? "",
       offerings: [{
-        price: {
-          amount:        Math.round(offeringPrice * 100),
-          divisor:       100,
-          currency_code: "USD",
-        },
-        // Note: inventory endpoint uses price object, listing create uses float
+        // Inventory PUT requires plain float — NOT the {amount, divisor} object Etsy returns on reads
+        price:      offeringPrice,
         quantity:   (offering.quantity as number) ?? 1,
         is_enabled: (offering.enabled as boolean) !== false,
       }],
