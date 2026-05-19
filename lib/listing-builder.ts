@@ -322,7 +322,6 @@ function buildEtsyInventory(variations: VariationsConfig, basePrice: number): Re
 
     return {
       sku:        (offering.sku as string) ?? "",
-      is_deleted: false,
       offerings: [{
         price: {
           amount:        Math.round(offeringPrice * 100),
