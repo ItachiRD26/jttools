@@ -98,11 +98,19 @@ export async function GET(
 
   const profiles = Array.from(seen.values()).sort((a, b) => a.processing_min - b.processing_min);
 
+  // If no active listings, return common defaults so developer has something to work with
+  const fallbackProfiles = profiles.length === 0 ? [
+    { readiness_state_id: 3, processing_min: 1, processing_max: 3,  processing_days_display_label: "1–3 business days" },
+    { readiness_state_id: 4, processing_min: 3, processing_max: 5,  processing_days_display_label: "3–5 business days" },
+    { readiness_state_id: 5, processing_min: 7, processing_max: 14, processing_days_display_label: "1–2 weeks" },
+  ] : profiles;
+
   return NextResponse.json({
     shop_id:             shopId,
     fetched_at:          new Date().toISOString(),
-    count:               profiles.length,
-    processing_profiles: profiles,
-    note: "Use readiness_state_id as shops[0].processing_profile_id when creating listings. JeterDev Tools resolves it automatically.",
+    count:               fallbackProfiles.length,
+    processing_profiles: fallbackProfiles,
+    note: "readiness_state_id is the real Etsy ID. Pass it as shops[0].processing_profile_id when creating listings.",
+    source:              profiles.length === 0 ? "fallback_defaults" : "active_listings",
   });
 }

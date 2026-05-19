@@ -295,11 +295,13 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   if (listing.item_width)             payload.item_width          = listing.item_width;
   if (listing.item_height)            payload.item_height         = listing.item_height;
   if (listing.item_dimensions_unit)   payload.item_dimensions_unit = listing.item_dimensions_unit;
-  // processing_min/max are the correct INPUT fields for Etsy createDraftListing.
-  // readiness_state_id is an OUTPUT field only per Etsy docs.
-  // We still need readiness_state_id on inventory PUT offerings (different endpoint).
+  // Send both processing_min/max AND readiness_state_id
+  // Etsy requires readiness_state_id despite docs saying it's output-only.
+  // The real ID is injected via shopConfig._readiness_state_id from fetchReadinessStateId().
   if (listing.processing_min) payload.processing_min = listing.processing_min;
   if (listing.processing_max) payload.processing_max = listing.processing_max;
+  const injectedReadiness = (shopConfig as unknown as Record<string, unknown>)._readiness_state_id;
+  if (injectedReadiness) payload.readiness_state_id = injectedReadiness;
   if (shopConfig.production_partner_ids?.length) {
     payload.production_partner_ids = shopConfig.production_partner_ids;
   }
@@ -588,7 +590,9 @@ async function publishToShop(
   }
 
   // 1. Fetch real readiness_state_id from this shop's active listings
-  const readinessStateId = await fetchReadinessStateId(shopId, accessToken);
+  // Pass processing_max so we can derive it if shop has no active listings
+  const processingMax = body.listing.processing_max ?? 3;
+  const readinessStateId = await fetchReadinessStateId(shopId, accessToken, processingMax);
   const shopConfigWithReadiness = {
     ...shopConfig,
     _readiness_state_id: readinessStateId,
