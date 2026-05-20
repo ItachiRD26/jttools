@@ -474,7 +474,7 @@ function Introduction() {
         <code className="font-mono text-sm text-[#7F77DD]">https://jeterdev.tools/api/v1</code>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {[["Free","$0","500 req/day","1 req/s","6 endpoints"],["Pro","$50/mo","30,000 req/day","10 req/s","All endpoints"]].map(([n,p,d,s,e]) => (
+        {[["Free","$0","100 req/day","1 req/s","6 endpoints"],["Starter","$25/mo","2,000 req/day","3 req/s","Read endpoints"],["Pro","$50/mo","50,000 req/day","10 req/s","All endpoints"]].map(([n,p,d,s,e]) => (
           <div key={n} className="bg-white/3 border border-white/6 rounded-xl p-4">
             <div className="text-[10px] font-mono text-white/30 uppercase mb-1">{n}</div>
             <div className="text-lg font-semibold text-white">{p}</div>
@@ -715,7 +715,7 @@ function NotificationsPushover() {
       <div>
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">What the notification looks like</p>
         <div className="bg-white/3 border border-white/6 rounded-xl p-4 font-mono text-sm space-y-1">
-          <p className="text-white/70 font-bold">💰 New sale — YOUR STORE NAME</p>
+          <p className="text-white/70 font-bold">💰 New sale — BambiCraftCo</p>
           <p className="text-white/50 text-xs">Order #3456789012</p>
           <p className="text-white/50 text-xs">$31.99 USD · 2 items · New York</p>
           <p className="text-[#7F77DD] text-xs underline">View order on Etsy →</p>

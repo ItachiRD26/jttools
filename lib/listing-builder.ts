@@ -572,12 +572,13 @@ async function fetchReadinessStateId(
 // uploadedImages = array of { listing_image_id, url_fullxfull, rank } from Etsy
 
 async function setVariationImages(
+  shopId: number,
   listingId: number,
   variationImages: { property: string; mapping: Record<string, number> },
   properties: VariationProperty[],
   uploadedImages: { listing_image_id: number; url_fullxfull: string; rank: number }[],
   accessToken: string
-): Promise<{ ok: boolean; error?: unknown }> {
+): Promise<{ ok: boolean; etsy_status?: number; etsy_error?: unknown; payload_sent?: unknown; error?: string }> {
   // Find the property_id for the variation that has images
   const propName = variationImages.property.toLowerCase();
   const prop = properties.find(p => p.name.toLowerCase() === propName);
@@ -585,44 +586,62 @@ async function setVariationImages(
     return { ok: false, error: `Variation property '${variationImages.property}' not found in properties[]` };
   }
 
-  // Build the variation_images payload for Etsy
-  // Each entry: { property_id, value, image_id (Etsy listing_image_id) }
-  const variationImageEntries: { property_id: number; value: string; image_id: number }[] = [];
+  // Build payload — needs value_id too (use 0 for custom/free-text properties)
+  const variationImageEntries: { property_id: number; value_id: number; image_id: number }[] = [];
 
   for (const [value, imageIndex] of Object.entries(variationImages.mapping)) {
-    // imageIndex is 0-based into the original images[] array
-    // uploadedImages is sorted by rank (rank 1 = index 0)
     const uploadedImage = uploadedImages[imageIndex];
     if (!uploadedImage) {
       console.warn(`[ListingBuilder] variation_images: no uploaded image at index ${imageIndex} for value "${value}"`);
       continue;
     }
+    // Find value_id from inventory — for custom props (513/514) value_id will be 0
+    const propValues = prop.values ?? [];
+    const valueIdx   = propValues.findIndex(v => v.toLowerCase() === value.toLowerCase());
     variationImageEntries.push({
       property_id: prop.property_id,
-      value,
-      image_id: uploadedImage.listing_image_id,
+      value_id:    valueIdx >= 0 ? valueIdx : 0, // 0 for custom free-text values
+      image_id:    uploadedImage.listing_image_id,
     });
   }
 
   if (variationImageEntries.length === 0) {
-    return { ok: false, error: "No valid variation image mappings could be built — check that images uploaded successfully" };
+    return { ok: false, error: "No valid variation image mappings — check images uploaded successfully" };
   }
 
-  const res = await etsyRequest(
-    "POST",
-    `/application/listings/${listingId}/variation-images`,
-    accessToken,
-    { variation_images: variationImageEntries }
-  );
+  const payload = { variation_images: variationImageEntries };
 
-  if (!res.ok) {
-    const errText = await res.text();
-    let errBody: unknown;
-    try { errBody = JSON.parse(errText); } catch { errBody = errText; }
-    return { ok: false, error: errBody };
+  // Retry with backoff — same eventual-consistency pattern as inventory PUT
+  const delays = [1000, 2000, 3000];
+  let lastRes: Response | null = null;
+
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, delays[attempt - 1]));
+      console.log(`[ListingBuilder] variation-images retry ${attempt} for listing ${listingId}`);
+    }
+    // URL: /application/shops/{shop_id}/listings/{listing_id}/variation-images
+    lastRes = await etsyRequest(
+      "POST",
+      `/application/shops/${shopId}/listings/${listingId}/variation-images`,
+      accessToken,
+      payload
+    );
+    console.log(`[ListingBuilder] variation-images attempt ${attempt + 1}: ${lastRes.status}`);
+    if (lastRes.ok) return { ok: true };
+    if (lastRes.status !== 404) break; // only retry on 404
   }
 
-  return { ok: true };
+  const errText = await lastRes!.text();
+  let errBody: unknown;
+  try { errBody = JSON.parse(errText); } catch { errBody = errText; }
+
+  return {
+    ok:           false,
+    etsy_status:  lastRes!.status,
+    etsy_error:   errBody,
+    payload_sent: payload,
+  };
 }
 
 // ─── Publish to a single shop ─────────────────────────────────────────────────
@@ -749,6 +768,7 @@ async function publishToShop(
   // 4. Set variation images (link uploaded images to variation values)
   if (body.variations?.variation_images && uploadedImages.length > 0) {
     const viResult = await setVariationImages(
+      shopId,
       listingId,
       body.variations.variation_images,
       body.variations.properties,
@@ -756,12 +776,15 @@ async function publishToShop(
       accessToken
     );
     if (!viResult.ok) {
-      console.warn(`[ListingBuilder] Variation images failed for listing ${listingId}:`, viResult.error);
+      console.warn(`[ListingBuilder] Variation images failed for listing ${listingId}:`, viResult.etsy_error ?? viResult.error);
       warnings.push({
-        code:   "VARIATION_IMAGES_FAILED",
-        fields: "variations.variation_images",
-        reason: typeof viResult.error === "string" ? viResult.error : JSON.stringify(viResult.error),
-      });
+        code:         "VARIATION_IMAGES_FAILED",
+        fields:       "variations.variation_images",
+        reason:       `Variation-images POST failed after ${4} attempts`,
+        etsy_status:  viResult.etsy_status,
+        etsy_error:   viResult.etsy_error,
+        payload_sent: viResult.payload_sent,
+      } as unknown as { code: string; fields: string; reason: string });
     } else {
       console.log(`[ListingBuilder] ✓ Variation images set for listing ${listingId}`);
     }
