@@ -586,9 +586,40 @@ async function setVariationImages(
     return { ok: false, error: `Variation property '${variationImages.property}' not found in properties[]` };
   }
 
-  // Build payload — custom properties (513/514) use value string, not value_id
-  // Etsy's variation-images endpoint accepts { property_id, value, image_id } for custom props
-  const variationImageEntries: { property_id: number; value: string; image_id: number }[] = [];
+  // ROUND-TRIP: After inventory PUT, Etsy auto-assigns value_ids to custom property values.
+  // We must GET /listings/{id}/inventory to read back the real value_ids before
+  // building the variation-images payload (which only accepts numeric value_id >= 1).
+  let etsyValueIdMap: Record<string, number> = {}; // "1 Glazed Stem" → 12345678
+
+  try {
+    const invRes = await etsyRequest(
+      "GET",
+      `/application/listings/${listingId}/inventory`,
+      accessToken
+    );
+    if (invRes.ok) {
+      const invData = await invRes.json();
+      const products = invData.products ?? [];
+      for (const product of products) {
+        const propVal = (product.property_values ?? []).find(
+          (pv: { property_id: number }) => pv.property_id === prop.property_id
+        );
+        if (propVal && propVal.values?.length && propVal.value_ids?.length) {
+          const valueStr = propVal.values[0] as string;
+          const valueId  = propVal.value_ids[0] as number;
+          if (valueId >= 1) {
+            etsyValueIdMap[valueStr] = valueId;
+          }
+        }
+      }
+      console.log(`[ListingBuilder] Read back ${Object.keys(etsyValueIdMap).length} value_ids from inventory`);
+    }
+  } catch (err) {
+    console.warn(`[ListingBuilder] Could not read inventory for value_ids:`, err);
+  }
+
+  // Build variation-images payload with real Etsy value_ids
+  const variationImageEntries: { property_id: number; value_id: number; image_id: number }[] = [];
 
   for (const [value, imageIndex] of Object.entries(variationImages.mapping)) {
     const uploadedImage = uploadedImages[imageIndex];
@@ -596,20 +627,25 @@ async function setVariationImages(
       console.warn(`[ListingBuilder] variation_images: no uploaded image at index ${imageIndex} for value "${value}"`);
       continue;
     }
+    const valueId = etsyValueIdMap[value];
+    if (!valueId || valueId < 1) {
+      console.warn(`[ListingBuilder] No Etsy value_id found for "${value}" — skipping`);
+      continue;
+    }
     variationImageEntries.push({
       property_id: prop.property_id,
-      value,        // string value directly — no value_id for custom properties
+      value_id:    valueId,
       image_id:    uploadedImage.listing_image_id,
     });
   }
 
   if (variationImageEntries.length === 0) {
-    return { ok: false, error: "No valid variation image mappings — check images uploaded successfully" };
+    return { ok: false, error: "No valid variation image mappings — could not read back value_ids from Etsy inventory" };
   }
 
   const payload = { variation_images: variationImageEntries };
 
-  // Retry with backoff — same eventual-consistency pattern as inventory PUT
+  // Retry with backoff
   const delays = [1000, 2000, 3000];
   let lastRes: Response | null = null;
 
@@ -618,7 +654,6 @@ async function setVariationImages(
       await new Promise(r => setTimeout(r, delays[attempt - 1]));
       console.log(`[ListingBuilder] variation-images retry ${attempt} for listing ${listingId}`);
     }
-    // URL: /application/shops/{shop_id}/listings/{listing_id}/variation-images
     lastRes = await etsyRequest(
       "POST",
       `/application/shops/${shopId}/listings/${listingId}/variation-images`,
@@ -627,7 +662,7 @@ async function setVariationImages(
     );
     console.log(`[ListingBuilder] variation-images attempt ${attempt + 1}: ${lastRes.status}`);
     if (lastRes.ok) return { ok: true };
-    if (lastRes.status !== 404) break; // only retry on 404
+    if (lastRes.status !== 404) break;
   }
 
   const errText = await lastRes!.text();
