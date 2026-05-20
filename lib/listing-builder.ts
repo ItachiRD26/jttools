@@ -586,8 +586,9 @@ async function setVariationImages(
     return { ok: false, error: `Variation property '${variationImages.property}' not found in properties[]` };
   }
 
-  // Build payload — needs value_id too (use 0 for custom/free-text properties)
-  const variationImageEntries: { property_id: number; value_id: number; image_id: number }[] = [];
+  // Build payload — custom properties (513/514) use value string, not value_id
+  // Etsy's variation-images endpoint accepts { property_id, value, image_id } for custom props
+  const variationImageEntries: { property_id: number; value: string; image_id: number }[] = [];
 
   for (const [value, imageIndex] of Object.entries(variationImages.mapping)) {
     const uploadedImage = uploadedImages[imageIndex];
@@ -595,12 +596,9 @@ async function setVariationImages(
       console.warn(`[ListingBuilder] variation_images: no uploaded image at index ${imageIndex} for value "${value}"`);
       continue;
     }
-    // Find value_id from inventory — for custom props (513/514) value_id will be 0
-    const propValues = prop.values ?? [];
-    const valueIdx   = propValues.findIndex(v => v.toLowerCase() === value.toLowerCase());
     variationImageEntries.push({
       property_id: prop.property_id,
-      value_id:    valueIdx >= 0 ? valueIdx : 0, // 0 for custom free-text values
+      value,        // string value directly — no value_id for custom properties
       image_id:    uploadedImage.listing_image_id,
     });
   }
