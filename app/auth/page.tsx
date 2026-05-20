@@ -46,11 +46,8 @@ function AuthContent() {
     try {
       if (mode === "signup") {
         setError("New registrations are currently closed. Contact us to request access.");
+        setLoading(false);
         return;
-        const { user } = await createUserWithEmailAndPassword(auth, email, password);
-        await setDoc(doc(db, "users", user.uid), {
-          email, name, planId: "free", createdAt: serverTimestamp(),
-        });
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
@@ -73,9 +70,23 @@ function AuthContent() {
     setLoading(true);
     try {
       const { user } = await signInWithPopup(auth, new GoogleAuthProvider());
+
+      // Check if user already exists in Firestore — block new registrations
+      const { getDoc, doc: firestoreDoc } = await import("firebase/firestore");
+      const userSnap = await getDoc(firestoreDoc(db, "users", user.uid));
+
+      if (!userSnap.exists()) {
+        // New user — not allowed, sign them out
+        const { getAuth: getClientAuth } = await import("firebase/auth");
+        await getClientAuth().signOut();
+        setError("Registrations are currently closed. Contact us to request access.");
+        setLoading(false);
+        return;
+      }
+
       await setDoc(
         doc(db, "users", user.uid),
-        { email: user.email, name: user.displayName, planId: "free", createdAt: serverTimestamp() },
+        { email: user.email, name: user.displayName },
         { merge: true }
       );
       const redirect = searchParams.get("redirect");
