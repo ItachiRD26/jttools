@@ -54,12 +54,12 @@ function DashboardContent() {
   const [keyVisible, setKeyVisible]   = useState(false);
   const [loading, setLoading]         = useState(true);
   const [generatingKey, setGeneratingKey] = useState(false);
-  const [cancelling, setCancelling]   = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [stores, setStores]           = useState<StoreConnection[]>([]);
   const [loadingStores, setLoadingStores] = useState(false);
   const [connectingStore, setConnectingStore] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [activatingPlan, setActivatingPlan] = useState(false);
+  const [capturingPayment, setCapturingPayment] = useState(false);
   const [paymentMsg, setPaymentMsg]   = useState("");
 
   const fetchUsage = useCallback(async (key: string) => {
@@ -69,35 +69,31 @@ function DashboardContent() {
     } catch {}
   }, []);
 
-  // ─── Nuevo flujo: activar suscripción después del redirect de PayPal ────────
-  const activateSubscription = useCallback(async (subscriptionId: string, currentUser: User) => {
-    setActivatingPlan(true);
-    setPaymentMsg("Confirming your subscription...");
+  const capturePaypalPayment = useCallback(async (orderId: string, currentUser: User) => {
+    setCapturingPayment(true);
+    setPaymentMsg("Confirming your PayPal payment...");
     try {
       const token = await currentUser.getIdToken();
-      const res = await fetch("/api/paypal/activate-subscription", {
+      const res = await fetch("/api/paypal/capture-order", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ subscriptionId }),
+        body: JSON.stringify({ orderId }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setPaymentMsg("✓ Subscription active. Welcome to Pro!");
+        setPaymentMsg("✓ Payment confirmed. Your plan is now active.");
         setApiKey(data.apiKey);
         setKeyVisible(true);
         const snap = await getDoc(doc(db, "users", currentUser.uid));
         if (snap.exists()) setUserData(snap.data() as UserData);
         if (data.apiKey) await fetchUsage(data.apiKey);
       } else {
-        setPaymentMsg("Could not confirm subscription. Please contact support.");
+        setPaymentMsg("Payment could not be confirmed. Please contact support.");
       }
     } catch {
       setPaymentMsg("Network error. Please try refreshing the page.");
     } finally {
-      setActivatingPlan(false);
-      // Limpiar sessionStorage y URL
-      sessionStorage.removeItem("pending_subscription_id");
-      sessionStorage.removeItem("pending_plan_id");
+      setCapturingPayment(false);
       router.replace("/dashboard");
     }
   }, [fetchUsage, router]);
@@ -118,20 +114,14 @@ function DashboardContent() {
       }
       setLoading(false);
 
-      // ── PayPal Subscriptions devuelve ?subscription_id=I-xxx&ba_token=...
-      //    También revisamos sessionStorage por si el redirect limpió la URL
-      const subscriptionSuccess = searchParams.get("subscription_success");
-      const subscriptionId =
-        searchParams.get("subscription_id") ||
-        sessionStorage.getItem("pending_subscription_id");
-
-      if (subscriptionSuccess === "1" && subscriptionId) {
-        await activateSubscription(subscriptionId, u);
+      // PayPal returns ?token=ORDER_ID&PayerID=... on approval
+      const paypalOrderId = searchParams.get("token");
+      const cancelled = searchParams.get("cancelled");
+      if (paypalOrderId) {
+        await capturePaypalPayment(paypalOrderId, u);
       }
-
-      // ── Etsy OAuth callbacks ─────────────────────────────────────────────
-      const etsyStatus = searchParams.get("etsy");
-      const etsyShop   = searchParams.get("shop");
+      const etsyStatus  = searchParams.get("etsy");
+      const etsyShop    = searchParams.get("shop");
       if (etsyStatus === "connected") {
         setPaymentMsg(`✓ "${etsyShop}" connected successfully!`);
         router.replace("/dashboard");
@@ -142,36 +132,39 @@ function DashboardContent() {
         setPaymentMsg("Error connecting store. Please try again.");
         router.replace("/dashboard");
       }
-
-      // ── PayPal cancellation redirect ─────────────────────────────────────
-      const cancelled = searchParams.get("cancelled");
       if (cancelled) {
         setPaymentMsg("Payment cancelled. You can try again anytime.");
         router.replace("/dashboard");
       }
 
+      // Always load stores on auth — regardless of URL params
       fetchStores(u);
+
     });
     return () => unsub();
-  }, [router, searchParams, fetchUsage, activateSubscription]);
+  }, [router, searchParams, fetchUsage, capturePaypalPayment]);
+
+
+
 
   async function fetchStores(u: typeof user, retries = 3) {
     if (!u) return;
     setLoadingStores(true);
     try {
-      const token = await u.getIdToken(true);
+      const token = await u.getIdToken(true); // force refresh token
       const res   = await fetch("/api/auth/etsy/stores", {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data = await res.json();
-        const storeList = data.stores ?? [];
-        setStores(storeList);
-        if (storeList.length === 0 && retries > 0) {
+        const stores = data.stores ?? [];
+        setStores(stores);
+        // If no stores but we just connected, retry a couple times
+        if (stores.length === 0 && retries > 0) {
           setTimeout(() => fetchStores(u, retries - 1), 1500);
         }
       }
-    } catch {}
+    } catch { /* silent */ }
     finally { setLoadingStores(false); }
   }
 
@@ -184,6 +177,24 @@ function DashboardContent() {
     } catch {
       alert("Error connecting store. Please try again.");
       setConnectingStore(false);
+    }
+  }
+
+  async function copyOAuthLink() {
+    if (!user) return;
+    try {
+      const token = await user.getIdToken();
+      const res   = await fetch("/api/auth/etsy/generate-link", {
+        method:  "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.oauth_url) {
+        await navigator.clipboard.writeText(data.oauth_url);
+        setPaymentMsg("OAuth link copied! Paste it in your other browser. Expires in 10 min.");
+      }
+    } catch {
+      alert("Error generating link. Please try again.");
     }
   }
 
@@ -202,6 +213,7 @@ function DashboardContent() {
       alert("Error disconnecting. Please try again.");
     }
   }
+
 
   async function cancelPlan() {
     if (!user) return;
@@ -307,16 +319,16 @@ function DashboardContent() {
           <p className="text-sm text-white/40 mt-1">{userData?.email}</p>
         </div>
 
-        {/* Payment / subscription status banner */}
-        {(paymentMsg || activatingPlan) && (
+        {/* Payment status */}
+        {(paymentMsg || capturingPayment) && (
           <div className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-sm ${
-            activatingPlan
+            capturingPayment
               ? "bg-[#7F77DD]/10 border-[#7F77DD]/20 text-[#7F77DD]"
               : paymentMsg.startsWith("✓")
               ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
               : "bg-red-500/10 border-red-500/20 text-red-400"
           }`}>
-            {activatingPlan && <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />}
+            {capturingPayment && <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />}
             {paymentMsg}
           </div>
         )}
@@ -427,21 +439,32 @@ function DashboardContent() {
           )}
         </div>
 
+
         {/* Connected Stores */}
         <div className="bg-white/3 border border-white/8 rounded-2xl p-5">
           <div className="flex items-center justify-between mb-4">
             <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest">Connected Stores</p>
-            <button
-              onClick={connectStore}
-              disabled={connectingStore}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-[#7F77DD]/10 hover:bg-[#7F77DD]/20 border border-[#7F77DD]/20 text-[#7F77DD] rounded-lg transition-colors disabled:opacity-50"
-            >
-              {connectingStore
-                ? <span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
-                : <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
-              }
-              Add store
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={copyOAuthLink}
+                title="Generate link to connect from another browser (AdsPower, etc.)"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-white/4 hover:bg-white/8 border border-white/10 text-white/50 hover:text-white/70 rounded-lg transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                Copy link
+              </button>
+              <button
+                onClick={connectStore}
+                disabled={connectingStore}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-[#7F77DD]/10 hover:bg-[#7F77DD]/20 border border-[#7F77DD]/20 text-[#7F77DD] rounded-lg transition-colors disabled:opacity-50"
+              >
+                {connectingStore
+                  ? <span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                  : <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                }
+                Add store
+              </button>
+            </div>
           </div>
 
           {loadingStores ? (
@@ -522,12 +545,16 @@ function DashboardContent() {
 
       {/* Profile Modal */}
       {profileOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setProfileOpen(false)}
           />
+
+          {/* Modal */}
           <div className="relative w-full max-w-md bg-[#111118] border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
+            {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-white/6">
               <h2 className="text-base font-semibold text-white">Account</h2>
               <button
@@ -541,6 +568,7 @@ function DashboardContent() {
             </div>
 
             <div className="p-6 space-y-5">
+              {/* User info */}
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-full bg-[#7F77DD]/20 border border-[#7F77DD]/30 flex items-center justify-center text-lg font-semibold text-[#7F77DD]">
                   {userData?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase()}
@@ -553,6 +581,7 @@ function DashboardContent() {
 
               <div className="h-px bg-white/6" />
 
+              {/* Subscription */}
               <div>
                 <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3">Subscription</p>
                 <div className="bg-white/3 border border-white/6 rounded-xl p-4 space-y-3">
@@ -613,6 +642,7 @@ function DashboardContent() {
 
               <div className="h-px bg-white/6" />
 
+              {/* Sign out */}
               <button
                 onClick={() => { setProfileOpen(false); signOut(auth).then(() => router.push("/auth")); }}
                 className="w-full py-2.5 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/5 border border-red-500/10 rounded-xl transition-colors"

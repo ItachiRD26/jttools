@@ -165,7 +165,11 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
     : (connection.expiresAt as FirebaseFirestore.Timestamp).toDate();
 
   // Refresh if expires in less than 5 minutes
-  if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
+  const timeToExpiry = expiresAt.getTime() - now.getTime();
+  console.log(`[OAuth] Shop ${shopId} token expires in ${Math.round(timeToExpiry / 60000)}min`);
+
+  if (timeToExpiry < 5 * 60 * 1000) {
+    console.log(`[OAuth] Refreshing token for shop ${shopId}...`);
     try {
       const newTokens    = await refreshAccessToken(connection.refreshToken);
       const newExpiresAt = new Date(Date.now() + newTokens.expires_in * 1000);

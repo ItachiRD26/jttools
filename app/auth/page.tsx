@@ -20,7 +20,7 @@ const db   = getFirestore(app);
 function AuthContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [mode, setMode]       = useState<"login" | "signup">("login");
+  const [mode, setMode]       = useState<"login" | "signup">("login"); // signup disabled
   const [email, setEmail]     = useState("");
   const [password, setPassword] = useState("");
   const [name, setName]       = useState("");
@@ -45,6 +45,8 @@ function AuthContent() {
     setLoading(true);
     try {
       if (mode === "signup") {
+        setError("New registrations are currently closed. Contact us to request access.");
+        return;
         const { user } = await createUserWithEmailAndPassword(auth, email, password);
         await setDoc(doc(db, "users", user.uid), {
           email, name, planId: "free", createdAt: serverTimestamp(),
@@ -121,7 +123,7 @@ function AuthContent() {
         <div className="bg-white/4 border border-white/8 rounded-2xl p-6 backdrop-blur-sm">
           {/* Tabs */}
           <div className="flex bg-white/4 rounded-lg p-1 mb-6">
-            {(["login", "signup"] as const).map((m) => (
+            {(["login"] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => { setMode(m); setError(""); }}

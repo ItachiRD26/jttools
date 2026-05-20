@@ -56,13 +56,19 @@ export async function GET(
     const errText = await res.text();
     let errBody: unknown;
     try { errBody = JSON.parse(errText); } catch { errBody = errText; }
+    console.error(`[ProcessingProfiles] Etsy listings fetch failed for shop ${shopId} (${res.status}):`, errBody);
+    // Return the real error — do NOT silently fall back to placeholders
+    // Placeholders cause "Could not find readiness_state_id" errors at publish time
     return NextResponse.json(
       {
         error: {
           code:    "UPSTREAM_ERROR",
           status:  502,
-          message: `Etsy listings fetch failed (${res.status}).`,
+          message: `Etsy returned ${res.status} when fetching active listings for shop ${shopId}.`,
           details: errBody,
+          hint:    res.status === 403
+            ? "OAuth scope may be missing. Reconnect the shop at jeterdev.tools/dashboard."
+            : "Check that the shop has at least one active listing — processing profiles are derived from listings.",
         },
       },
       { status: 502 }
@@ -98,19 +104,25 @@ export async function GET(
 
   const profiles = Array.from(seen.values()).sort((a, b) => a.processing_min - b.processing_min);
 
-  // If no active listings, return common defaults so developer has something to work with
-  const fallbackProfiles = profiles.length === 0 ? [
-    { readiness_state_id: 3, processing_min: 1, processing_max: 3,  processing_days_display_label: "1–3 business days" },
-    { readiness_state_id: 4, processing_min: 3, processing_max: 5,  processing_days_display_label: "3–5 business days" },
-    { readiness_state_id: 5, processing_min: 7, processing_max: 14, processing_days_display_label: "1–2 weeks" },
-  ] : profiles;
+  if (profiles.length === 0) {
+    // No active listings — cannot derive real readiness_state_ids
+    // Do NOT return placeholders — they fail at publish time
+    return NextResponse.json({
+      shop_id:             shopId,
+      fetched_at:          new Date().toISOString(),
+      count:               0,
+      processing_profiles: [],
+      source:              "active_listings",
+      warning:             "No active listings found on this shop. Processing profiles are derived from active listings. Create at least one active listing on Etsy first, or pass processing_min/processing_max in your listing payload — JeterDev Tools will derive the readiness_state_id automatically.",
+    });
+  }
 
   return NextResponse.json({
     shop_id:             shopId,
     fetched_at:          new Date().toISOString(),
-    count:               fallbackProfiles.length,
-    processing_profiles: fallbackProfiles,
+    count:               profiles.length,
+    processing_profiles: profiles,
     note: "readiness_state_id is the real Etsy ID. Pass it as shops[0].processing_profile_id when creating listings.",
-    source:              profiles.length === 0 ? "fallback_defaults" : "active_listings",
+    source:              "active_listings",
   });
 }
