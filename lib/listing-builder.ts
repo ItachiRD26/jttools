@@ -263,6 +263,46 @@ async function etsyRequest(
 
 // ─── Build Etsy listing payload from unified format ───────────────────────────
 
+// ─── Field sanitisers ────────────────────────────────────────────────────────
+// Etsy rejects materials that contain non-ASCII characters.
+// This happens silently when copy-paste introduces typographic hyphens
+// (U+2011, U+2013, U+2014), curly quotes, bullets, etc.
+// We normalise every material string before it leaves the bridge:
+//   1. Replace common lookalike punctuation with their ASCII equivalents.
+//   2. Strip anything still outside printable ASCII (U+0020–U+007E).
+//   3. Trim whitespace and drop empty strings.
+// Tags follow the same rules per Etsy docs (plain ASCII, max 20 chars each).
+
+function normaliseAscii(s: string): string {
+  return s
+    // Non-breaking hyphen, en-dash, em-dash → regular hyphen
+    .replace(/[‑–—]/g, "-")
+    // Curly/typographic quotes → straight quotes
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    // Bullet, middle dot → hyphen (materials context)
+    .replace(/[•·]/g, "-")
+    // Non-breaking space → regular space
+    .replace(/ /g, " ")
+    // Ellipsis → three dots
+    .replace(/…/g, "...")
+    // Strip anything still outside printable ASCII
+    .replace(/[^ -~]/g, "")
+    .trim();
+}
+
+function sanitiseMaterials(materials: string[]): string[] {
+  return materials
+    .map(normaliseAscii)
+    .filter(Boolean);
+}
+
+function sanitiseTags(tags: string[]): string[] {
+  return tags
+    .map(t => normaliseAscii(t).slice(0, 20))
+    .filter(Boolean);
+}
+
 function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): Record<string, unknown> {
   const price = shopConfig.price ?? listing.price;
 
@@ -276,8 +316,8 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
     when_made:         listing.when_made,
     taxonomy_id:       listing.taxonomy_id,
     listing_type:      listing.listing_type ?? "physical",
-    tags:              listing.tags ?? [],
-    materials:         listing.materials ?? [],
+    tags:              sanitiseTags(listing.tags ?? []),
+    materials:         sanitiseMaterials(listing.materials ?? []),
     styles:            listing.styles ?? [],
     is_supply:         listing.is_supply ?? false,
     is_customizable:   listing.is_customizable ?? false,
