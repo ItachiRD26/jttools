@@ -297,7 +297,7 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   if (listing.item_dimensions_unit)   payload.item_dimensions_unit = listing.item_dimensions_unit;
   // Send both processing_min/max AND readiness_state_id
   // Etsy requires readiness_state_id despite docs saying it's output-only.
-  // The real ID is injected via shopConfig._readiness_state_id from fetchReadinessStateId().
+  // The real ID is injected via shopConfig._readiness_state_id from resolveReadinessStateId().
   if (listing.processing_min) payload.processing_min = listing.processing_min;
   if (listing.processing_max) payload.processing_max = listing.processing_max;
   const injectedReadiness = (shopConfig as unknown as Record<string, unknown>)._readiness_state_id;
@@ -311,7 +311,7 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
 
 // ─── Build Etsy inventory from variations ────────────────────────────────────
 
-function buildEtsyInventory(variations: VariationsConfig, basePrice: number, readinessStateId = 3): Record<string, unknown> {
+function buildEtsyInventory(variations: VariationsConfig, basePrice: number, readinessStateId: number): Record<string, unknown> {
   const { properties, offerings } = variations;
 
   // Build property name → property info lookup
@@ -500,34 +500,29 @@ async function setPersonalization(
   );
 }
 
-// ─── Fetch real readiness_state_id from shop's active listings ───────────────
-// Etsy v3 requires a shop-specific readiness_state_id — it cannot be set inline.
-// We grab it from any active listing on the shop.
+// ─── Resolve readiness_state_id for a shop ───────────────────────────────────
+//
+// Priority order:
+//   1. shopConfig.processing_profile_id  — caller supplied a real Etsy ID (large integer).
+//      Use it directly; no network call needed.
+//   2. GET /readiness-state-definitions  — the official Etsy endpoint (shops_r scope).
+//      Returns profiles regardless of whether the shop has active listings.
+//      If multiple profiles exist, pick the one whose min/max best matches
+//      the requested processing window (or just take the first).
+//   3. Hard error — do NOT silently fall back to a hardcoded table.
+//      Hardcoded IDs (1, 2, 3…) are NOT universal; they are shop-specific.
+//      Sending the wrong ID causes Etsy's "Could not find readiness_state_id" error.
 
-// Map processing_min/max to Etsy's standard readiness_state_id
-// These are universal IDs — not shop-specific
-function processingToReadinessId(min: number, max: number): number {
-  if (max <= 1)  return 1; // Same day / 1 day
-  if (max <= 2)  return 2; // 1-2 days
-  if (max <= 3)  return 3; // 1-3 days
-  if (max <= 5)  return 4; // 3-5 days
-  if (max <= 7)  return 5; // 1-2 weeks (up to 7 days)
-  if (max <= 14) return 6; // 1-2 weeks
-  if (max <= 21) return 7; // 2-3 weeks
-  if (max <= 30) return 8; // 3-4 weeks
-  return 9;                // longer
-}
-
-async function fetchReadinessStateId(
+// Returns null if the endpoint is unreachable or the shop has no profiles.
+async function fetchReadinessStateIdFromEtsy(
   shopId: number,
   accessToken: string,
-  processingMin?: number,
-  processingMax?: number,
-): Promise<number> {
-  // First try: get from an active listing on the shop (most reliable)
+  preferredMin?: number,
+  preferredMax?: number,
+): Promise<number | null> {
   try {
     const res = await fetch(
-      `${ETSY_BASE}/application/shops/${shopId}/listings/active?limit=5&fields=listing_id,readiness_state_id`,
+      `${ETSY_BASE}/application/shops/${shopId}/readiness-state-definitions?limit=100`,
       {
         headers: {
           "x-api-key":     API_KEY(),
@@ -536,34 +531,41 @@ async function fetchReadinessStateId(
         },
       }
     );
-    if (res.ok) {
-      const data     = await res.json();
-      const listings = data.results ?? [];
-      // Find first listing that has a valid readiness_state_id
-      for (const listing of listings) {
-        const id = listing?.readiness_state_id;
-        if (id && typeof id === "number" && id > 0) {
-          console.log(`[ListingBuilder] Got readiness_state_id=${id} from active listing on shop ${shopId}`);
-          return id;
-        }
+    if (!res.ok) {
+      console.warn(`[ListingBuilder] readiness-state-definitions returned ${res.status} for shop ${shopId}`);
+      return null;
+    }
+    const data = await res.json();
+    const profiles: Array<{ readiness_state_id: number; min_processing_days: number; max_processing_days: number }> =
+      data.results ?? [];
+
+    if (profiles.length === 0) return null;
+
+    // If caller supplied a preferred processing window, try to match it
+    if (preferredMin !== undefined || preferredMax !== undefined) {
+      const pMin = preferredMin ?? 1;
+      const pMax = preferredMax ?? pMin;
+      const match = profiles.find(
+        p => p.min_processing_days === pMin && p.max_processing_days === pMax
+      );
+      if (match) {
+        console.log(`[ListingBuilder] Matched readiness_state_id=${match.readiness_state_id} for ${pMin}-${pMax} days on shop ${shopId}`);
+        return match.readiness_state_id;
       }
     }
+
+    // No exact match — take first profile and warn
+    const first = profiles[0];
+    console.warn(
+      `[ListingBuilder] No exact processing-time match for shop ${shopId} — ` +
+      `using first profile readiness_state_id=${first.readiness_state_id} ` +
+      `(${first.min_processing_days}-${first.max_processing_days} days)`
+    );
+    return first.readiness_state_id;
   } catch (err) {
-    console.warn(`[ListingBuilder] Could not fetch readiness_state_id from listings:`, err);
+    console.warn(`[ListingBuilder] Could not fetch readiness-state-definitions for shop ${shopId}:`, err);
+    return null;
   }
-
-  // Second try: map from processing_min/max provided in the request
-  if (processingMin !== undefined || processingMax !== undefined) {
-    const min = processingMin ?? 1;
-    const max = processingMax ?? 3;
-    const id  = processingToReadinessId(min, max);
-    console.log(`[ListingBuilder] Derived readiness_state_id=${id} from processing_min=${min} processing_max=${max}`);
-    return id;
-  }
-
-  // Final fallback
-  console.warn(`[ListingBuilder] Using readiness_state_id=4 (3-5 days) as fallback for shop ${shopId}`);
-  return 4;
 }
 
 // ─── Set variation images ─────────────────────────────────────────────────────
@@ -700,10 +702,39 @@ async function publishToShop(
     };
   }
 
-  // 1. Fetch real readiness_state_id from this shop's active listings
-  // Pass processing_max so we can derive it if shop has no active listings
-  const processingMax = body.listing.processing_max ?? 3;
-  const readinessStateId = await fetchReadinessStateId(shopId, accessToken, processingMax);
+  // 1. Resolve readiness_state_id — three-step priority:
+  //    a) shopConfig.processing_profile_id is a real Etsy ID (large integer) → use directly
+  //    b) GET /readiness-state-definitions → pick matching profile
+  //    c) No profiles found → hard fail (do NOT fall back to a hardcoded table)
+  let readinessStateId: number;
+
+  const rawProfileId = shopConfig.processing_profile_id;
+  const parsedProfileId = typeof rawProfileId === "string"
+    ? parseInt(rawProfileId, 10)
+    : (typeof rawProfileId === "number" ? rawProfileId : NaN);
+
+  // Real Etsy readiness_state_ids are large shop-specific integers (> 1000).
+  // Synthetic composite keys like "1-3" parse to NaN or small numbers — skip those.
+  if (!isNaN(parsedProfileId) && parsedProfileId > 1000) {
+    readinessStateId = parsedProfileId;
+    console.log(`[ListingBuilder] Using caller-supplied processing_profile_id=${readinessStateId} as readiness_state_id for shop ${shopId}`);
+  } else {
+    // Not supplied or not a real ID — fetch from Etsy
+    const preferredMin = body.listing.processing_min;
+    const preferredMax = body.listing.processing_max;
+    const fetched = await fetchReadinessStateIdFromEtsy(shopId, accessToken, preferredMin, preferredMax);
+    if (!fetched) {
+      return {
+        shop_id: String(shopId),
+        status:  "error",
+        error:   `Could not resolve a readiness_state_id for shop ${shopId}. ` +
+                 `Supply processing_profile_id from GET /stores/${shopId}/processing-profiles/live, ` +
+                 `or configure processing time in your Etsy dashboard.`,
+      };
+    }
+    readinessStateId = fetched;
+  }
+
   const shopConfigWithReadiness = {
     ...shopConfig,
     _readiness_state_id: readinessStateId,

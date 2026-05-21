@@ -499,10 +499,6 @@ function Authentication() {
         <h1 className="text-2xl font-semibold tracking-tight text-white mb-3">Authentication</h1>
         <p className="text-sm text-white/50 leading-relaxed">All requests require an API key via the <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">x-api-key</code> header. Generate your key from the <a href="/dashboard" className="text-[#7F77DD] hover:underline">Dashboard</a>.</p>
       </div>
-      <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 text-xs text-amber-300/80">
-        <strong>readiness_state_id</strong> is required by Etsy for physical listings. JeterDev Tools derives it automatically from <code className="font-mono bg-white/6 px-1 rounded">processing_min</code>/<code className="font-mono bg-white/6 px-1 rounded">processing_max</code>. Defaults to <strong>3</strong> (1–3 business days) if omitted.
-      </div>
-
       <InfoBox type="warn">Never expose your API key in client-side code or public repositories. If compromised, rotate it immediately from your dashboard.</InfoBox>
       <CodeBlock code={`curl "https://jeterdev.tools/api/v1/listings/search?query=art" \\\n  -H "x-api-key: jt_a3f4b5c6d7e8f9..."`} />
       <div>
@@ -1052,6 +1048,36 @@ function ListingCreate() {
     "activation_cost_usd": 0, "warnings": []
   }]
 }`} lang="json" />
+        </div>
+      </div>
+      <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-3">
+        <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">processing_profile_id resolution</p>
+        <p className="text-xs text-white/50 leading-relaxed">
+          <code className="font-mono bg-white/6 px-1 rounded">shops[0].processing_profile_id</code> must be a real Etsy readiness state ID obtained from{" "}
+          <code className="font-mono bg-white/6 px-1 rounded">GET /stores/&#123;shopId&#125;/processing-profiles/live</code>.
+          The create endpoint resolves it in this order:
+        </p>
+        <div className="border border-white/6 rounded-lg overflow-hidden">
+          {([
+            ["1", "processing_profile_id supplied",   "Large integer (> 1000) from /processing-profiles/live. Used directly — no network call.", "fast path"],
+            ["2", "processing_profile_id absent",     "Calls GET /readiness-state-definitions. If processing_min/max are set, picks the matching profile. Otherwise takes the first.", "one API call"],
+            ["3", "No profiles on shop",              "Hard error — returns 400 with a descriptive message. Does not fall back to a hardcoded ID.", "error"],
+          ] as [string,string,string,string][]).map(([n, label, desc, tag]) => (
+            <div key={n} className="grid grid-cols-12 text-xs px-4 py-3 border-b border-white/4 last:border-0 items-start gap-2">
+              <div className="col-span-1 font-mono text-white/30">{n}</div>
+              <div className="col-span-3 font-mono text-white/60 text-[11px]">{label}</div>
+              <div className="col-span-6 text-white/40">{desc}</div>
+              <div className="col-span-2"><span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                tag === "fast path" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" :
+                tag === "error"     ? "text-red-400 bg-red-500/10 border-red-500/20" :
+                "text-white/30 bg-white/5 border-white/10"
+              }`}>{tag}</span></div>
+            </div>
+          ))}
+        </div>
+        <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
+          <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest mb-1">Breaking change from previous behavior</p>
+          <p className="text-xs text-white/50 leading-relaxed">The previous implementation silently fell back to a hardcoded ID table when no active listings were found, producing IDs like <code className="font-mono bg-white/6 px-1 rounded">3</code> that are not valid for most shops. This is now a hard error. Always pass a real ID from <code className="font-mono bg-white/6 px-1 rounded">/processing-profiles/live</code>.</p>
         </div>
       </div>
       <div>
