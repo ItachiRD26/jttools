@@ -756,12 +756,21 @@ async function publishToShop(
     const errText = await createRes.text();
     let errBody: unknown;
     try { errBody = JSON.parse(errText); } catch { errBody = errText; }
-    console.error(`[ListingBuilder] Etsy 400 for shop ${shopId}:`, JSON.stringify(errBody));
+    console.error(
+      `[ListingBuilder] listings/create failed for shop ${shopId} (${createRes.status}):`,
+      JSON.stringify(errBody),
+      "\nPayload sent:",
+      JSON.stringify(etsyPayload)
+    );
     return {
       shop_id: String(shopId),
       status:  "error",
-      error:   (errBody as { error?: string })?.error ?? `Etsy listing creation failed (${createRes.status})`,
-      details: errBody,
+      error:   `Etsy listing creation failed (${createRes.status})`,
+      details: {
+        etsy_status:  createRes.status,
+        etsy_error:   errBody,
+        payload_sent: etsyPayload,
+      },
     };
   }
 
