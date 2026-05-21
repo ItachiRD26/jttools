@@ -9,7 +9,6 @@ import { FieldValue } from "firebase-admin/firestore";
 import crypto from "crypto";
 
 const ETSY_BASE     = "https://www.etsy.com/oauth";
-const ETSY_API_BASE = "https://openapi.etsy.com/v3";
 const CLIENT_ID     = process.env.ETSY_API_KEY!;
 const REDIRECT_URI  = `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/etsy/callback`;
 
@@ -82,14 +81,18 @@ export async function refreshAccessToken(refreshToken: string): Promise<EtsyToke
 // Collection: etsyConnections/{userId}/shops/{shopId}
 
 export interface StoreConnection {
-  userId:       string;
-  shopId:       string;
-  shopName:     string;
-  etsyUserId:   string;
-  accessToken:  string;
-  refreshToken: string;
-  expiresAt:    Date | FirebaseFirestore.Timestamp;
-  connectedAt:  FirebaseFirestore.FieldValue | FirebaseFirestore.Timestamp;
+  userId:             string;
+  shopId:             string;
+  shopName:           string;
+  etsyUserId:         string;
+  accessToken:        string;
+  refreshToken:       string;
+  expiresAt:          Date | FirebaseFirestore.Timestamp;
+  connectedAt:        FirebaseFirestore.FieldValue | FirebaseFirestore.Timestamp;
+  // Set to true when a refresh attempt fails (revoked, expired refresh token, etc.)
+  // Cleared back to false on successful reconnect via saveStoreConnection.
+  connection_expired?: boolean;
+  expiredAt?:          FirebaseFirestore.FieldValue | FirebaseFirestore.Timestamp;
 }
 
 export async function saveStoreConnection(
@@ -112,10 +115,13 @@ export async function saveStoreConnection(
       shopId:       String(shopId),
       shopName,
       etsyUserId,
-      accessToken:  tokens.access_token,
-      refreshToken: tokens.refresh_token,
+      accessToken:        tokens.access_token,
+      refreshToken:       tokens.refresh_token,
       expiresAt,
-      connectedAt:  FieldValue.serverTimestamp(),
+      connectedAt:        FieldValue.serverTimestamp(),
+      // Reconnect always clears any previous expiry flag
+      connection_expired: false,
+      expiredAt:          null,
     });
 }
 
@@ -150,13 +156,36 @@ export async function disconnectStore(userId: string, shopId: string) {
     .delete();
 }
 
+// ─── Typed error so callers can distinguish the two failure modes ─────────────
+
+export class StoreNotConnectedError extends Error {
+  constructor(shopId: string) {
+    super(`STORE_NOT_CONNECTED:${shopId}`);
+    this.name = "StoreNotConnectedError";
+  }
+}
+
+export class StoreTokenExpiredError extends Error {
+  constructor(shopId: string) {
+    super(`STORE_TOKEN_EXPIRED:${shopId}`);
+    this.name = "StoreTokenExpiredError";
+  }
+}
+
 // ─── Get valid access token for a shop (auto-refresh) ────────────────────────
+// Throws StoreNotConnectedError  — no Firestore doc for this shop
+// Throws StoreTokenExpiredError  — refresh token is dead, user must re-link
 export async function getValidAccessToken(userId: string, shopId: string): Promise<string> {
   const db         = getDb();
   const connection = await getStoreConnection(userId, shopId);
 
   if (!connection) {
-    throw new Error(`STORE_NOT_CONNECTED:${shopId}`);
+    throw new StoreNotConnectedError(shopId);
+  }
+
+  // If a previous refresh already failed, fail fast rather than hammering Etsy
+  if (connection.connection_expired) {
+    throw new StoreTokenExpiredError(shopId);
   }
 
   const now       = new Date();
@@ -164,7 +193,6 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
     ? connection.expiresAt
     : (connection.expiresAt as FirebaseFirestore.Timestamp).toDate();
 
-  // Refresh if expires in less than 5 minutes
   const timeToExpiry = expiresAt.getTime() - now.getTime();
   console.log(`[OAuth] Shop ${shopId} token expires in ${Math.round(timeToExpiry / 60000)}min`);
 
@@ -180,15 +208,31 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
         .collection("shops")
         .doc(String(shopId))
         .update({
-          accessToken:  newTokens.access_token,
-          refreshToken: newTokens.refresh_token,
-          expiresAt:    newExpiresAt,
+          accessToken:        newTokens.access_token,
+          refreshToken:       newTokens.refresh_token,
+          expiresAt:          newExpiresAt,
+          // Clear any stale expiry flag in case it was partially set
+          connection_expired: false,
+          expiredAt:          null,
         });
 
       return newTokens.access_token;
     } catch (refreshErr) {
       console.error(`[OAuth] Refresh failed for shop ${shopId}:`, refreshErr);
-      throw new Error(`STORE_TOKEN_EXPIRED:${shopId} — Re-connect your shop at jeterdev.tools/dashboard`);
+
+      // Persist the failure so subsequent calls skip the refresh attempt
+      // and the stores endpoint can surface connection_expired to the consumer.
+      await db
+        .collection("etsyConnections")
+        .doc(userId)
+        .collection("shops")
+        .doc(String(shopId))
+        .update({
+          connection_expired: true,
+          expiredAt:          FieldValue.serverTimestamp(),
+        });
+
+      throw new StoreTokenExpiredError(shopId);
     }
   }
 

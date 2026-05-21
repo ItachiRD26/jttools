@@ -596,7 +596,23 @@ function StoreConnection() {
       </div>
       <div>
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Error if not connected</p>
-        <CodeBlock code={`{\n  "error": {\n    "code": "STORE_NOT_CONNECTED",\n    "status": 403,\n    "message": "You don't have an Etsy shop connected.",\n    "hint": "Connect your Etsy shop at jeterdev.tools/dashboard.",\n    "docs": "https://jeterdev.tools/docs#store-connection"\n  }\n}`} lang="json" />
+        <CodeBlock code={`{\n  "error": {\n    "code": "STORE_NOT_CONNECTED",\n    "status": 403,\n    "message": "Shop 61004439 is not connected.",\n    "hint": "Connect the shop at jeterdev.tools/dashboard."\n  }\n}`} lang="json" />
+      </div>
+      <div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Error if token expired</p>
+        <p className="text-xs text-white/40 mb-2 leading-relaxed">When Etsy revokes a refresh token (user revoked access, token aged out, etc.), the bridge marks the shop <code className="font-mono bg-white/6 px-1 rounded">connection_expired: true</code> in Firestore and all subsequent calls for that shop return this error immediately without retrying the upstream.</p>
+        <CodeBlock code={`{\n  "error": {\n    "code": "STORE_TOKEN_EXPIRED",\n    "status": 403,\n    "message": "Shop 61004439 OAuth token has expired and could not be refreshed. Re-link the shop to restore access.",\n    "connection_expired": true,\n    "hint": "Re-connect the shop at jeterdev.tools/dashboard."\n  }\n}`} lang="json" />
+        <div className="mt-3 bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
+          <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest mb-2">How to detect proactively</p>
+          <p className="text-xs text-white/50 leading-relaxed mb-3">Poll <code className="font-mono bg-white/6 px-1 rounded">GET /api/v1/stores</code> and check each store entry for <code className="font-mono bg-white/6 px-1 rounded">connection_expired: true</code>. When set, prompt your user to re-link before they attempt a publish — rather than letting the publish fail.</p>
+          <CodeBlock code={`const stores = await getStores();
+for (const store of stores) {
+  if (store.connection_expired) {
+    // surface reconnect CTA to your user
+    promptReconnect(store.shopId, store.shopName);
+  }
+}`} lang="typescript" />
+        </div>
       </div>
       <div>
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">OAuth scopes requested</p>
@@ -616,9 +632,9 @@ function Errors() {
     { code:"MISSING_API_KEY",         status:401, desc:"No x-api-key header provided.",                      hint:"Pass your key via the x-api-key header." },
     { code:"API_KEY_DISABLED",        status:403, desc:"This API key has been disabled.",                     hint:"Generate a new key at jeterdev.tools/dashboard." },
     { code:"ENDPOINT_NOT_IN_PLAN",    status:403, desc:"Endpoint not available on your current plan.",        hint:"Upgrade at jeterdev.tools/pricing." },
-    { code:"STORE_NOT_CONNECTED",     status:403, desc:"Endpoint requires a connected Etsy shop.",            hint:"Connect at jeterdev.tools/dashboard." },
-    { code:"STORE_NOT_OWNED",         status:403, desc:"shop_id is not connected to your account.",           hint:"Connect shops at jeterdev.tools/dashboard." },
-    { code:"STORE_TOKEN_EXPIRED",     status:503, desc:"Store authorization has expired.",                    hint:"Reconnect your shop at jeterdev.tools/dashboard." },
+    { code:"STORE_NOT_CONNECTED",     status:403, desc:"No Firestore doc for this shop — it was never linked or was deleted.", hint:"Connect at jeterdev.tools/dashboard." },
+    { code:"STORE_NOT_OWNED",         status:403, desc:"shop_id belongs to a different user account.",        hint:"Use a shop_id returned by GET /stores." },
+    { code:"STORE_TOKEN_EXPIRED",     status:403, desc:"Refresh failed — token revoked or expired. connection_expired:true is set on the store entry.", hint:"Re-link the shop at jeterdev.tools/dashboard. Poll GET /stores and check connection_expired." },
     { code:"ENDPOINT_NOT_FOUND",      status:404, desc:"This endpoint does not exist.",                      hint:"Check the path against the docs." },
     { code:"RATE_LIMIT_DAILY",        status:429, desc:"Daily request limit reached.",                       hint:"Limit resets at midnight UTC. Retry-After header included." },
     { code:"RATE_LIMIT_SECOND",       status:429, desc:"Per-second rate limit exceeded.",                    hint:"Wait the Retry-After seconds before retrying." },
@@ -1101,12 +1117,31 @@ function StoresList() {
       </div>
       <CodeBlock code={`curl "https://jeterdev.tools/api/v1/stores" -H "x-api-key: jt_YOUR_KEY"`} />
       <CodeBlock code={`{
-  "count": 2,
+  "plan": "Pro",
+  "remaining": 4892,
   "stores": [
-    { "shop_id": "61004439", "shop_name": "MyCeramicsShop", "is_connected": true, "token_valid": true, "connected_at": "2026-05-09T12:00:00.000Z" },
-    { "shop_id": "72005550", "shop_name": "MyVintageShop",  "is_connected": true, "token_valid": true, "connected_at": "2026-05-10T08:30:00.000Z" }
+    {
+      "shopId": "61004439",
+      "shopName": "MyCeramicsShop",
+      "etsyUserId": "288401054",
+      "connectedAt": "2026-05-09T12:00:00.000Z",
+      "token_valid": true,
+      "connection_expired": false
+    },
+    {
+      "shopId": "72005550",
+      "shopName": "MyVintageShop",
+      "etsyUserId": "301882914",
+      "connectedAt": "2026-05-10T08:30:00.000Z",
+      "token_valid": false,
+      "connection_expired": true
+    }
   ]
 }`} lang="json" />
+      <div className="border border-amber-500/20 bg-amber-500/5 rounded-xl p-4">
+        <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest mb-2">⚠ Detecting expired connections</p>
+        <p className="text-xs text-white/50 leading-relaxed">When <code className="font-mono text-xs bg-white/6 px-1 rounded">connection_expired</code> is <code className="font-mono text-xs bg-white/6 px-1 rounded">true</code>, the OAuth refresh token has failed — auto-refresh will not recover the shop. Show a reconnect CTA to your user. Attempting any authenticated call for that shop returns <code className="font-mono text-xs bg-white/6 px-1 rounded">STORE_TOKEN_EXPIRED</code> (403) until the shop is re-linked.</p>
+      </div>
     </div>
   );
 }
@@ -1126,7 +1161,16 @@ function StoresSync() {
   "shop_id": "61004439", "synced_at": "2026-05-09T14:22:00.000Z",
   "shipping_profiles":   [{ "shipping_profile_id": 289094606827, "title": "US Standard" }],
   "return_policies":     [{ "return_policy_id": 1396555302092, "accepts_returns": true }],
-  "processing_profiles": [{ "production_partner_profile_id": 1456101932490, "title": "1-3 days" }],
+  "processing_profiles": [
+    {
+      "readiness_state_id": 1456101932490,
+      "readiness_state": "made_to_order",
+      "min_processing_days": 1,
+      "max_processing_days": 3,
+      "processing_days_display_label": "1-3 days",
+      "shop_id": 61004439
+    }
+  ],
   "shop_sections":       [{ "shop_section_id": 55308357, "title": "Mugs & Cups" }],
   "production_partners": []   // separate from processing_profiles
 }`} lang="json" />
@@ -1136,32 +1180,102 @@ function StoresSync() {
 
 function StoresLive() {
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div>
         <p className="text-[10px] font-mono text-[#7F77DD] tracking-widest uppercase mb-2">Stores</p>
         <h1 className="text-2xl font-semibold tracking-tight text-white mb-2">Live Profiles</h1>
         <p className="text-sm text-white/50 leading-relaxed">Four endpoints that always hit Etsy fresh — never cached. Use them individually when you only need one data type. For all four at once use <code className="font-mono text-xs bg-white/6 px-1.5 py-0.5 rounded">POST /stores/{"{shopId}"}/sync</code>.</p>
       </div>
       <InfoBox>All /live endpoints require the shop to be connected and count against your daily rate limit.</InfoBox>
-      <div>
-        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Shared response shape</p>
-        <CodeBlock code={`{ "shop_id": "61004439", "fetched_at": "2026-05-09T14:22:00.000Z", "count": 3, "<profile_type>": [...] }`} lang="json" />
-      </div>
-      {([
-        ["/stores/{shopId}/shipping-profiles/live", "shipping_profiles",   "Shipping profiles → shipping_profile_id"],
-        ["/stores/{shopId}/return-policies/live",   "return_policies",     "Return policies → return_policy_id"],
-        ["/stores/{shopId}/processing-profiles/live","processing_profiles","Processing profiles → processing_profile_id"],
-        ["/stores/{shopId}/shop-sections/live",     "shop_sections",       "Shop sections → shop_section_id"],
-      ] as [string,string,string][]).map(([path, key, desc]) => (
-        <div key={path} className="border border-white/6 rounded-xl p-4">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">GET</span>
-            <span className="font-mono text-sm text-white/70">{path}</span>
-          </div>
-          <p className="text-xs text-white/40 mb-3">{desc}</p>
-          <CodeBlock code={`curl "https://jeterdev.tools/api/v1/${path.replace("{shopId}","61004439")}" -H "x-api-key: jt_YOUR_KEY"`} />
+
+      {/* ── Shipping Profiles ── */}
+      <div className="border border-white/6 rounded-xl p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">GET</span>
+          <span className="font-mono text-sm text-white/70">/stores/{"{shopId}"}/shipping-profiles/live</span>
         </div>
-      ))}
+        <p className="text-xs text-white/40">All shipping profiles for the shop. Use <code className="font-mono bg-white/6 px-1 rounded">shipping_profile_id</code> when creating listings.</p>
+        <CodeBlock code={`curl "https://jeterdev.tools/api/v1/stores/61004439/shipping-profiles/live" -H "x-api-key: jt_YOUR_KEY"`} />
+      </div>
+
+      {/* ── Return Policies ── */}
+      <div className="border border-white/6 rounded-xl p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">GET</span>
+          <span className="font-mono text-sm text-white/70">/stores/{"{shopId}"}/return-policies/live</span>
+        </div>
+        <p className="text-xs text-white/40">Shop return policies. Use <code className="font-mono bg-white/6 px-1 rounded">return_policy_id</code> when creating listings.</p>
+        <CodeBlock code={`curl "https://jeterdev.tools/api/v1/stores/61004439/return-policies/live" -H "x-api-key: jt_YOUR_KEY"`} />
+      </div>
+
+      {/* ── Processing Profiles ── */}
+      <div className="border border-[#7F77DD]/30 rounded-xl p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">GET</span>
+          <span className="font-mono text-sm text-white/70">/stores/{"{shopId}"}/processing-profiles/live</span>
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded border bg-[#7F77DD]/10 text-[#7F77DD] border-[#7F77DD]/20">updated</span>
+        </div>
+        <p className="text-xs text-white/40 leading-relaxed">Processing time profiles configured for the shop. Fetched directly from <code className="font-mono bg-white/6 px-1 rounded">GET /v3/application/shops/&#123;shop_id&#125;/readiness-state-definitions</code> — the official Etsy endpoint. Results exist independently of active listings.</p>
+        <div className="bg-[#7F77DD]/5 border border-[#7F77DD]/15 rounded-lg p-3">
+          <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest mb-1.5">Key field</p>
+          <p className="text-xs text-white/50">Use <code className="font-mono bg-white/6 px-1 rounded">readiness_state_id</code> as <code className="font-mono bg-white/6 px-1 rounded">shops[0].processing_profile_id</code> when publishing listings. This is the real Etsy ID — not a derived value.</p>
+        </div>
+        <CodeBlock code={`curl "https://jeterdev.tools/api/v1/stores/61004439/processing-profiles/live" -H "x-api-key: jt_YOUR_KEY"`} />
+        <CodeBlock code={`{
+  "shop_id": "61004439",
+  "fetched_at": "2026-05-20T18:00:00.000Z",
+  "count": 2,
+  "source": "readiness_state_definitions",
+  "note": "readiness_state_id is the real Etsy ID. Pass it as shops[0].processing_profile_id when creating listings.",
+  "processing_profiles": [
+    {
+      "readiness_state_id": 1456101932490,
+      "readiness_state": "made_to_order",
+      "min_processing_days": 1,
+      "max_processing_days": 3,
+      "processing_days_display_label": "1-3 days",
+      "shop_id": 61004439
+    },
+    {
+      "readiness_state_id": 1456101932491,
+      "readiness_state": "ready_to_ship",
+      "min_processing_days": 0,
+      "max_processing_days": 0,
+      "processing_days_display_label": "Ready to ship",
+      "shop_id": 61004439
+    }
+  ]
+}`} lang="json" />
+        <div className="border border-white/6 rounded-lg overflow-hidden">
+          <div className="grid grid-cols-12 text-[10px] font-mono text-white/30 uppercase tracking-wider px-4 py-2 border-b border-white/6 bg-white/2">
+            <div className="col-span-4">Field</div><div className="col-span-2">Type</div><div className="col-span-6">Description</div>
+          </div>
+          {([
+            ["readiness_state_id",            "integer", "Etsy's numeric ID for this profile. Use as processing_profile_id when creating a listing."],
+            ["readiness_state",               "string",  "ready_to_ship or made_to_order"],
+            ["min_processing_days",           "integer", "Minimum processing days (0 = same day / ready to ship)"],
+            ["max_processing_days",           "integer", "Maximum processing days"],
+            ["processing_days_display_label", "string",  "Etsy's translated display label, e.g. \"1-3 days\""],
+            ["shop_id",                       "integer", "The owning shop"],
+          ] as [string,string,string][]).map(([f,t,d]) => (
+            <div key={f} className="grid grid-cols-12 text-xs px-4 py-2.5 border-b border-white/4 last:border-0 items-start">
+              <div className="col-span-4 font-mono text-white/60 text-[11px]">{f}</div>
+              <div className="col-span-2 font-mono text-white/30 text-[10px]">{t}</div>
+              <div className="col-span-6 text-white/40">{d}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Shop Sections ── */}
+      <div className="border border-white/6 rounded-xl p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">GET</span>
+          <span className="font-mono text-sm text-white/70">/stores/{"{shopId}"}/shop-sections/live</span>
+        </div>
+        <p className="text-xs text-white/40">Shop sections (categories). Use <code className="font-mono bg-white/6 px-1 rounded">shop_section_id</code> when creating listings.</p>
+        <CodeBlock code={`curl "https://jeterdev.tools/api/v1/stores/61004439/shop-sections/live" -H "x-api-key: jt_YOUR_KEY"`} />
+      </div>
     </div>
   );
 }

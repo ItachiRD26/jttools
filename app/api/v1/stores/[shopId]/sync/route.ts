@@ -5,7 +5,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
 import { getDb } from "@/lib/firebase-admin";
-import { getValidAccessToken } from "@/lib/etsy-oauth";
+import {
+  getValidAccessToken,
+  StoreNotConnectedError,
+  StoreTokenExpiredError,
+} from "@/lib/etsy-oauth";
 
 const ETSY_BASE = "https://openapi.etsy.com/v3";
 const API_KEY   = () => `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
@@ -35,38 +39,15 @@ async function etsyGet(path: string, accessToken: string): Promise<FetchResult> 
   }
 }
 
-// Derive processing profiles from active listings (no standalone Etsy endpoint)
-async function deriveProcessingProfiles(shopId: string, accessToken: string): Promise<FetchResult> {
-  const r = await etsyGet(
-    `/application/shops/${shopId}/listings/active?limit=100&fields=listing_id,processing_min,processing_max`,
+// Fetch processing profiles directly from Etsy's readiness-state-definitions endpoint.
+// This endpoint (GET /v3/application/shops/{shop_id}/readiness-state-definitions) is GA
+// and returns profiles regardless of whether the shop has active listings.
+// Scope: shops_r (already included in ETSY_SCOPES).
+async function fetchProcessingProfiles(shopId: string, accessToken: string): Promise<FetchResult> {
+  return etsyGet(
+    `/application/shops/${shopId}/readiness-state-definitions?limit=100`,
     accessToken
   );
-  if (r.error || !r.data) return r;
-
-  const seen = new Set<string>();
-  const profiles: unknown[] = [];
-  for (const listing of r.data as { processing_min?: number; processing_max?: number }[]) {
-    const min = listing.processing_min ?? 1;
-    const max = listing.processing_max ?? 3;
-    const key = `${min}-${max}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      profiles.push({
-        processing_profile_id: key,
-        processing_min:        min,
-        processing_max:        max,
-        processing_days_display_label: min === max
-          ? `${min} business day${min === 1 ? "" : "s"}`
-          : `${min}–${max} business days`,
-      });
-    }
-  }
-  profiles.sort((a: unknown, b: unknown) => {
-    const ap = a as { processing_min: number };
-    const bp = b as { processing_min: number };
-    return ap.processing_min - bp.processing_min;
-  });
-  return { data: profiles, error: null, status: 200 };
 }
 
 // Return policies: try new endpoint, fall back to legacy
@@ -97,9 +78,30 @@ export async function POST(
   let accessToken: string;
   try {
     accessToken = await getValidAccessToken(userId, shopId);
-  } catch {
+  } catch (err) {
+    if (err instanceof StoreTokenExpiredError) {
+      return NextResponse.json(
+        {
+          error: {
+            code:              "STORE_TOKEN_EXPIRED",
+            status:            403,
+            message:           `Shop ${shopId} OAuth token has expired and could not be refreshed. Re-link the shop to restore access.`,
+            connection_expired: true,
+            hint:              "Re-connect the shop at jeterdev.tools/dashboard.",
+          },
+        },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
-      { error: { code: "STORE_NOT_CONNECTED", status: 403, message: `Shop ${shopId} is not connected.` } },
+      {
+        error: {
+          code:    "STORE_NOT_CONNECTED",
+          status:  403,
+          message: `Shop ${shopId} is not connected.`,
+          hint:    "Connect the shop at jeterdev.tools/dashboard.",
+        },
+      },
       { status: 403 }
     );
   }
@@ -109,7 +111,7 @@ export async function POST(
     await Promise.all([
       etsyGet(`/application/shops/${shopId}/shipping-profiles`, accessToken),
       fetchReturnPolicies(shopId, accessToken),
-      deriveProcessingProfiles(shopId, accessToken),
+      fetchProcessingProfiles(shopId, accessToken),
       etsyGet(`/application/shops/${shopId}/sections`, accessToken),
       etsyGet(`/application/shops/${shopId}/production-partners`, accessToken),
     ]);
