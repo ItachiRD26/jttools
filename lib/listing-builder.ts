@@ -243,7 +243,11 @@ async function etsyRequest(
     for (const [key, val] of Object.entries(flat)) {
       if (val === undefined || val === null) continue;
       if (Array.isArray(val)) {
-        val.forEach(v => params.append(key, String(v)));
+        // Etsy's form parser requires bracket notation for arrays.
+        // Sending duplicate bare keys (tags=a&tags=b) causes Etsy to pick
+        // one value arbitrarily — the classic "only last/first element survives" bug.
+        // Correct encoding: tags[]=a&tags[]=b
+        val.forEach(v => params.append(`${key}[]`, String(v)));
       } else {
         params.append(key, String(val));
       }

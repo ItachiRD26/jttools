@@ -276,7 +276,7 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
     { method: "GET", path: "/categories/{id}/listing-schema", description: "Full schema for a taxonomy — required fields, optional fields, category attributes with possible values, and variation properties. Cache this response.", plan: "Pro+",
       params: [{ name:"id",type:"string",required:true,description:"Etsy taxonomy node ID" }],
       example: `curl "https://jeterdev.tools/api/v1/categories/482/listing-schema" -H "x-api-key: jt_YOUR_KEY"`,
-      response: `{"taxonomy_id":482,"required_fields":["title","description","price","quantity","taxonomy_id","listing_type","who_made","when_made"],"optional_fields":["tags","materials","sku","styles","processing_min","processing_max"],"category_attributes":[{"property_id":200,"name":"Primary color","required":false,"possible_values":[{"value_id":1,"name":"Black"},{"value_id":2,"name":"White"}],"scales":[]}],"variation_properties":[{"property_id":200,"name":"Primary color","scales":[]},{"property_id":62809790533,"name":"Size","scales":[{"scale_id":17,"display_name":"US","description":"US sizing"}]}]}` },
+      response: `{"taxonomy_id":482,"required_fields":["title","description","price","quantity","taxonomy_id","listing_type","who_made","when_made"],"optional_fields":["tags","materials","sku","styles","processing_min","processing_max"],"category_attributes":[{"property_id":200,"name":"Primary color","required":false,"is_multivalued":false,"max_values_allowed":1,"possible_values":[{"value_id":1,"name":"Black"},{"value_id":2,"name":"White"}],"scales":[]}],"variation_properties":[{"property_id":200,"name":"Primary color","scales":[]},{"property_id":62809790533,"name":"Size","scales":[{"scale_id":17,"display_name":"US","description":"US sizing"}]}]}` },
   ],
 
   users: [
@@ -1102,6 +1102,29 @@ function ListingCreate() {
     "hint": "Connect shops at jeterdev.tools/dashboard."
   }
 }`} lang="json" />
+      </div>
+      <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-3">
+        <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">Array field serialization</p>
+        <p className="text-xs text-white/50 leading-relaxed">
+          Fields that accept multiple values — <code className="font-mono bg-white/6 px-1 rounded">tags</code>, <code className="font-mono bg-white/6 px-1 rounded">materials</code>, <code className="font-mono bg-white/6 px-1 rounded">styles</code>, <code className="font-mono bg-white/6 px-1 rounded">production_partner_ids</code> — must be sent
+          to Etsy using bracket notation in the form-encoded body. The bridge handles this automatically.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-[10px] font-mono text-red-400/60 uppercase tracking-widest mb-1.5">Wrong — bare duplicate keys</p>
+            <CodeBlock code={`tags=vintage+tee&tags=band+shirt&tags=cotton`} />
+            <p className="text-[10px] text-white/30 mt-1.5">Etsy picks one value arbitrarily — the rest are silently dropped.</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-mono text-emerald-400/60 uppercase tracking-widest mb-1.5">Correct — bracket notation</p>
+            <CodeBlock code={`tags[]=vintage+tee&tags[]=band+shirt&tags[]=cotton`} />
+            <p className="text-[10px] text-white/30 mt-1.5">All values preserved. The bridge uses this format on every request.</p>
+          </div>
+        </div>
+        <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
+          <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest mb-1">If you were seeing truncated tags or materials</p>
+          <p className="text-xs text-white/50 leading-relaxed">This was a serialization bug where the bridge sent bare duplicate keys instead of bracket notation. Etsy's parser kept one value arbitrarily — not always the first, not always the last. Fixed in the current version. Re-publish any affected listings.</p>
+        </div>
       </div>
     </div>
   );
