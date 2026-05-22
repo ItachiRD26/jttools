@@ -844,12 +844,73 @@ async function publishToShop(
   }
 
   // 3. Set inventory/variations
-  // Two bugs fixed:
-  // (a) Wrong URL: must be /application/listings/{id}/inventory (no /shops/ prefix)
-  // (b) Etsy eventual consistency: new listings return 404 for ~1-3s after create
-  //     Retry with backoff — same approach ETO used.
-  if (body.variations?.properties?.length) {
-    const inventory = buildEtsyInventory(body.variations, body.listing.price, readinessStateId);
+  // Two code paths:
+  //   A) Variations listing  → buildEtsyInventory() builds the full product matrix
+  //   B) Single-item listing → minimal inventory PUT with one product, used ONLY to
+  //      persist the SKU. Etsy v3 ignores the top-level sku field on listing create;
+  //      SKU must live in inventory.products[0].sku.
+  // Both paths share the same retry-with-backoff logic (Etsy 404 for ~1-3s after create).
+
+  // ── Path B: single-item SKU ──────────────────────────────────────────────
+  const hasSku        = Boolean(body.listing.sku);
+  const hasVariations = Boolean(body.variations?.properties?.length);
+
+  if (hasSku && !hasVariations) {
+    const singleItemInventory = {
+      products: [{
+        sku:             body.listing.sku,
+        property_values: [],
+        offerings: [{
+          price: {
+            amount:        Math.round((body.listing.price ?? 0) * 100),
+            divisor:       100,
+            currency_code: "USD",
+          },
+          quantity:   body.listing.quantity ?? 1,
+          is_enabled: true,
+        }],
+      }],
+      price_on_property:    [],
+      quantity_on_property: [],
+      sku_on_property:      [],
+    };
+
+    const SKU_URL = `/application/listings/${listingId}/inventory`;
+    let skuRes: Response | null = null;
+    const skuDelays = [1000, 2000, 3000];
+
+    for (let attempt = 0; attempt <= skuDelays.length; attempt++) {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, skuDelays[attempt - 1]));
+        console.log(`[ListingBuilder] SKU inventory PUT retry ${attempt} for listing ${listingId}`);
+      }
+      skuRes = await etsyRequest("PUT", SKU_URL, accessToken, singleItemInventory);
+      console.log(`[ListingBuilder] SKU inventory PUT attempt ${attempt + 1}: ${skuRes.status}`);
+      if (skuRes.ok) break;
+      if (skuRes.status !== 404) break;
+    }
+
+    if (!skuRes || !skuRes.ok) {
+      const skuErrText = await skuRes!.text();
+      let skuErrBody: unknown;
+      try { skuErrBody = JSON.parse(skuErrText); } catch { skuErrBody = skuErrText; }
+      console.error(`[ListingBuilder] SKU inventory PUT failed for listing ${listingId}:`, JSON.stringify(skuErrBody));
+      warnings.push({
+        code:        "SKU_SET_FAILED",
+        fields:      "listing.sku",
+        reason:      `SKU inventory PUT failed after ${skuDelays.length + 1} attempts`,
+        etsy_error:  skuErrBody,
+        etsy_status: skuRes!.status,
+        payload_sent: singleItemInventory,
+      } as unknown as { code: string; fields: string; reason: string });
+    } else {
+      console.log(`[ListingBuilder] SKU set for listing ${listingId}: ${body.listing.sku}`);
+    }
+  }
+
+  // ── Path A: variations inventory ─────────────────────────────────────────
+  if (hasVariations) {
+    const inventory = buildEtsyInventory(body.variations!, body.listing.price, readinessStateId);
     const INVENTORY_URL = `/application/listings/${listingId}/inventory`;
 
     let invRes: Response | null = null;
@@ -880,7 +941,7 @@ async function publishToShop(
         inventory_payload_sent: inventory,
       } as unknown as { code: string; fields: string; reason: string });
     }
-  }
+  } // end Path A
 
   // 4. Set variation images (link uploaded images to variation values)
   if (body.variations?.variation_images && uploadedImages.length > 0) {

@@ -114,7 +114,7 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
       params: [{ name:"shop_id",type:"string",required:true,description:"Etsy shop ID" }],
       example: `curl "https://jeterdev.tools/api/v1/listings/featured?shop_id=61004439" -H "x-api-key: jt_YOUR_KEY"` },
     { method: "POST",   path: "/listings/create",     description: "Create a new listing in the connected shop.", plan: "Pro+", note: "Requires Etsy shop connection.",
-      params: [{ name:"shop_id",type:"string",required:true,description:"Etsy shop ID" },{ name:"title",type:"string",required:true,description:"Listing title (max 140)" },{ name:"description",type:"string",required:true,description:"Full description" },{ name:"price",type:"object",required:true,description:"{amount, divisor, currency_code}" },{ name:"quantity",type:"integer",required:true,description:"Available quantity" },{ name:"taxonomy_id",type:"integer",required:true,description:"Etsy category ID" },{ name:"who_made",type:"string",required:true,description:"i_did · someone_else · collective" },{ name:"when_made",type:"string",required:true,description:"2020_2026 · made_to_order · etc." },{ name:"listing_type",type:"string",required:false,description:"physical · download · both" },{ name:"tags",type:"array",required:false,description:"Up to 13 tags" },{ name:"shipping_profile_id",type:"string",required:false,description:"Required for physical" },{ name:"return_policy_id",type:"string",required:false,description:"Required for physical" }],
+      params: [{ name:"shop_id",type:"string",required:true,description:"Etsy shop ID" },{ name:"title",type:"string",required:true,description:"Listing title (max 140)" },{ name:"description",type:"string",required:true,description:"Full description" },{ name:"price",type:"object",required:true,description:"{amount, divisor, currency_code}" },{ name:"quantity",type:"integer",required:true,description:"Available quantity" },{ name:"taxonomy_id",type:"integer",required:true,description:"Etsy category ID" },{ name:"who_made",type:"string",required:true,description:"i_did · someone_else · collective" },{ name:"when_made",type:"string",required:true,description:"2020_2026 · made_to_order · etc." },{ name:"listing_type",type:"string",required:false,description:"physical · download · both" },{ name:"tags",type:"array",required:false,description:"Up to 13 tags" },{ name:"materials",type:"array",required:false,description:"Up to 13 materials (plain ASCII only)" },{ name:"sku",type:"string",required:false,description:"SKU for single-item listings (no variations). Stored via inventory PUT — Etsy v3 ignores top-level sku on listing create." },{ name:"shipping_profile_id",type:"string",required:false,description:"Required for physical" },{ name:"return_policy_id",type:"string",required:false,description:"Required for physical" }],
       example: `curl -X POST "https://jeterdev.tools/api/v1/listings/create" \\
   -H "x-api-key: jt_YOUR_KEY" -H "Content-Type: application/json" \\
   -d '{"shop_id":"61004439","title":"Handmade Ceramic Mug","description":"Beautiful mug...","price":{"amount":2500,"divisor":100,"currency_code":"USD"},"quantity":10,"taxonomy_id":1110,"who_made":"i_did","when_made":"made_to_order","listing_type":"physical","tags":["ceramic","mug"]}'` },
@@ -991,6 +991,7 @@ function ListingCreate() {
     "price": 29.99, "quantity": 100,
     "who_made": "i_did", "when_made": "2020_2026",
     "tags": ["vintage tee", "band shirt"],
+    "sku": "VTG-BND-BLK-M",
     "processing_min": 1, "processing_max": 3
   },
   "images": [
@@ -1102,6 +1103,27 @@ function ListingCreate() {
     "hint": "Connect shops at jeterdev.tools/dashboard."
   }
 }`} lang="json" />
+      </div>
+      <div className="border border-white/6 rounded-xl p-4 space-y-3">
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-1">Non-fatal warnings</p>
+        <p className="text-xs text-white/40 leading-relaxed mb-2">When a listing publishes but a secondary step fails, the response returns <code className="font-mono bg-white/6 px-1 rounded">status: "ok"</code> with a <code className="font-mono bg-white/6 px-1 rounded">warnings</code> array. The listing exists on Etsy — only the flagged field is missing. Each warning includes <code className="font-mono bg-white/6 px-1 rounded">etsy_status</code>, <code className="font-mono bg-white/6 px-1 rounded">etsy_error</code>, and <code className="font-mono bg-white/6 px-1 rounded">payload_sent</code> for diagnosis.</p>
+        <div className="border border-white/6 rounded-lg overflow-hidden">
+          <div className="grid grid-cols-12 text-[10px] font-mono text-white/30 uppercase tracking-wider px-4 py-2 border-b border-white/6 bg-white/2">
+            <div className="col-span-4">code</div><div className="col-span-2">affects</div><div className="col-span-6">meaning</div>
+          </div>
+          {([
+            ["INVENTORY_SET_FAILED",   "variations",  "Variations inventory PUT failed. Listing exists but has no pricing matrix or inventory. Retry the inventory step."],
+            ["SKU_SET_FAILED",         "listing.sku", "SKU inventory PUT failed for a single-item listing. Listing published but skus: [] on Etsy. Re-publish or patch manually."],
+            ["VARIATION_IMAGES_FAILED","variation_images", "Variation image mapping POST failed. Listing and inventory are correct but images are not linked to color/size values."],
+            ["ATTRIBUTES_SET_FAILED",  "category_attributes", "One or more category attribute PUTs failed. Listing published but attributes missing — affects search filtering on Etsy."],
+          ] as [string,string,string][]).map(([code, fields, desc]) => (
+            <div key={code} className="grid grid-cols-12 text-xs px-4 py-2.5 border-b border-white/4 last:border-0 items-start">
+              <div className="col-span-4 font-mono text-amber-400/80 text-[11px]">{code}</div>
+              <div className="col-span-2 font-mono text-white/30 text-[10px]">{fields}</div>
+              <div className="col-span-6 text-white/40">{desc}</div>
+            </div>
+          ))}
+        </div>
       </div>
       <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-3">
         <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">Array field serialization</p>
