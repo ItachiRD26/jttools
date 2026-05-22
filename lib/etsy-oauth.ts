@@ -175,6 +175,78 @@ export class StoreTokenExpiredError extends Error {
 // ─── Get valid access token for a shop (auto-refresh) ────────────────────────
 // Throws StoreNotConnectedError  — no Firestore doc for this shop
 // Throws StoreTokenExpiredError  — refresh token is dead, user must re-link
+// ─── Distributed refresh lock ────────────────────────────────────────────────
+// Vercel is serverless — multiple concurrent requests can all see a near-expired
+// token and race to refresh it. Etsy uses refresh token rotation: the first
+// request to refresh invalidates the old refresh token immediately. The second
+// request (arriving ms later with the now-dead token) fails → connection_expired.
+//
+// Fix: Firestore-based optimistic lock.
+//   1. Before refreshing, write refreshing:true + refreshingAt:now (only if not
+//      already set) using a transaction that checks the current value.
+//   2. If another process already holds the lock, wait up to LOCK_TIMEOUT_MS
+//      and re-read the doc — it will have the new access token by then.
+//   3. After refresh (success or failure), clear the lock.
+//   4. Lock has a TTL guard: if refreshingAt is older than LOCK_TTL_MS the lock
+//      is considered stale (crashed process) and we override it.
+
+const LOCK_POLL_MS    = 300;  // how often to re-check while waiting
+const LOCK_TIMEOUT_MS = 8000; // max time to wait for another process to finish
+const LOCK_TTL_MS     = 15000; // stale lock threshold — assume crash after this
+
+async function withRefreshLock<T>(
+  userId: string,
+  shopId: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const db  = getDb();
+  const ref = db
+    .collection("etsyConnections")
+    .doc(userId)
+    .collection("shops")
+    .doc(String(shopId));
+
+  // Try to acquire lock via transaction
+  const acquired = await db.runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    const data = snap.data() ?? {};
+    const isLocked    = data.refreshing === true;
+    const lockedAt    = (data.refreshingAt as FirebaseFirestore.Timestamp)?.toDate?.() ?? new Date(0);
+    const lockAge     = Date.now() - lockedAt.getTime();
+    const lockIsStale = lockAge > LOCK_TTL_MS;
+
+    if (isLocked && !lockIsStale) return false; // another process has it
+
+    tx.update(ref, { refreshing: true, refreshingAt: FieldValue.serverTimestamp() });
+    return true;
+  });
+
+  if (!acquired) {
+    // Another process is refreshing — poll until it finishes or we time out
+    console.log(`[OAuth] Shop ${shopId} refresh lock held by another process, waiting...`);
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, LOCK_POLL_MS));
+      const snap = await ref.get();
+      const data = snap.data() ?? {};
+      if (!data.refreshing) {
+        // Lock released — return whatever token the other process stored
+        console.log(`[OAuth] Shop ${shopId} lock released, using refreshed token`);
+        return data.accessToken as T;
+      }
+    }
+    // Timed out waiting — proceed anyway (worst case: duplicate refresh attempt)
+    console.warn(`[OAuth] Shop ${shopId} lock wait timed out, proceeding with refresh`);
+  }
+
+  try {
+    return await fn();
+  } finally {
+    // Always release the lock
+    await ref.update({ refreshing: false, refreshingAt: null }).catch(() => {});
+  }
+}
+
 export async function getValidAccessToken(userId: string, shopId: string): Promise<string> {
   const db         = getDb();
   const connection = await getStoreConnection(userId, shopId);
@@ -183,7 +255,6 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
     throw new StoreNotConnectedError(shopId);
   }
 
-  // If a previous refresh already failed, fail fast rather than hammering Etsy
   if (connection.connection_expired) {
     throw new StoreTokenExpiredError(shopId);
   }
@@ -196,45 +267,56 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
   const timeToExpiry = expiresAt.getTime() - now.getTime();
   console.log(`[OAuth] Shop ${shopId} token expires in ${Math.round(timeToExpiry / 60000)}min`);
 
-  if (timeToExpiry < 5 * 60 * 1000) {
+  if (timeToExpiry >= 5 * 60 * 1000) {
+    // Token still valid — return immediately, no lock needed
+    return connection.accessToken;
+  }
+
+  // Token near expiry — acquire distributed lock before refreshing
+  return withRefreshLock(userId, shopId, async () => {
+    // Re-read inside the lock: another process may have already refreshed
+    const fresh = await getStoreConnection(userId, shopId);
+    if (!fresh) throw new StoreNotConnectedError(shopId);
+
+    const freshExpiresAt = fresh.expiresAt instanceof Date
+      ? fresh.expiresAt
+      : (fresh.expiresAt as FirebaseFirestore.Timestamp).toDate();
+
+    if (freshExpiresAt.getTime() - Date.now() >= 5 * 60 * 1000) {
+      console.log(`[OAuth] Shop ${shopId} already refreshed by another process`);
+      return fresh.accessToken;
+    }
+
     console.log(`[OAuth] Refreshing token for shop ${shopId}...`);
+    const ref = db
+      .collection("etsyConnections")
+      .doc(userId)
+      .collection("shops")
+      .doc(String(shopId));
+
     try {
-      const newTokens    = await refreshAccessToken(connection.refreshToken);
+      const newTokens    = await refreshAccessToken(fresh.refreshToken);
       const newExpiresAt = new Date(Date.now() + newTokens.expires_in * 1000);
 
-      await db
-        .collection("etsyConnections")
-        .doc(userId)
-        .collection("shops")
-        .doc(String(shopId))
-        .update({
-          accessToken:        newTokens.access_token,
-          refreshToken:       newTokens.refresh_token,
-          expiresAt:          newExpiresAt,
-          // Clear any stale expiry flag in case it was partially set
-          connection_expired: false,
-          expiredAt:          null,
-        });
+      await ref.update({
+        accessToken:        newTokens.access_token,
+        refreshToken:       newTokens.refresh_token,
+        expiresAt:          newExpiresAt,
+        connection_expired: false,
+        expiredAt:          null,
+      });
 
+      console.log(`[OAuth] Shop ${shopId} token refreshed, expires in ${newTokens.expires_in}s`);
       return newTokens.access_token;
     } catch (refreshErr) {
       console.error(`[OAuth] Refresh failed for shop ${shopId}:`, refreshErr);
 
-      // Persist the failure so subsequent calls skip the refresh attempt
-      // and the stores endpoint can surface connection_expired to the consumer.
-      await db
-        .collection("etsyConnections")
-        .doc(userId)
-        .collection("shops")
-        .doc(String(shopId))
-        .update({
-          connection_expired: true,
-          expiredAt:          FieldValue.serverTimestamp(),
-        });
+      await ref.update({
+        connection_expired: true,
+        expiredAt:          FieldValue.serverTimestamp(),
+      });
 
       throw new StoreTokenExpiredError(shopId);
     }
-  }
-
-  return connection.accessToken;
+  });
 }
