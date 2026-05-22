@@ -861,11 +861,9 @@ async function publishToShop(
         sku:             body.listing.sku,
         property_values: [],
         offerings: [{
-          price: {
-            amount:        Math.round((body.listing.price ?? 0) * 100),
-            divisor:       100,
-            currency_code: "USD",
-          },
+          // Inventory PUT expects a plain float, not a money object.
+          // Same fix as the variations path — amount/divisor = float.
+          price:      parseFloat((body.listing.price ?? 0).toFixed(2)),
           quantity:   body.listing.quantity ?? 1,
           is_enabled: true,
         }],
