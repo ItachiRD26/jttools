@@ -89,16 +89,20 @@ export async function GET(
 
   // Separate attributes from variation properties
   const categoryAttributes = properties.map((prop: {
-    property_id: number;
-    name: string;
+    property_id:        number;
+    name:               string;
     supports_variations: boolean;
-    is_required: boolean;
-    scales: unknown[];
-    possible_values: { value_id: number; name: string; scale_id?: number }[];
+    is_required:        boolean;
+    is_multivalued:     boolean;
+    max_values_allowed: number | null;
+    scales:             unknown[];
+    possible_values:    { value_id: number; name: string; scale_id?: number }[];
   }) => ({
-    property_id:     prop.property_id,
-    name:            prop.name,
-    required:        prop.is_required ?? false,
+    property_id:        prop.property_id,
+    name:               prop.name,
+    required:           prop.is_required        ?? false,
+    is_multivalued:     prop.is_multivalued      ?? false,
+    max_values_allowed: prop.max_values_allowed  ?? null,
     possible_values: (prop.possible_values ?? []).map((v: { value_id: number; name: string; scale_id?: number }) => ({
       value_id: v.value_id,
       name:     v.name,
