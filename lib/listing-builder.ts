@@ -243,11 +243,10 @@ async function etsyRequest(
     for (const [key, val] of Object.entries(flat)) {
       if (val === undefined || val === null) continue;
       if (Array.isArray(val)) {
-        // Etsy's form parser requires bracket notation for arrays.
-        // Sending duplicate bare keys (tags=a&tags=b) causes Etsy to pick
-        // one value arbitrarily — the classic "only last/first element survives" bug.
-        // Correct encoding: tags[]=a&tags[]=b
-        val.forEach(v => params.append(`${key}[]`, String(v)));
+        // Etsy v3's form parser expects repeated bare keys, NOT PHP bracket notation.
+        // tags=a&tags=b&tags=c  ← correct (all values preserved)
+        // tags[]=a&tags[]=b     ← wrong (Etsy reads "tags[]" as an unknown field)
+        val.forEach(v => params.append(key, String(v)));
       } else {
         params.append(key, String(val));
       }
@@ -885,7 +884,14 @@ async function publishToShop(
       skuRes = await etsyRequest("PUT", SKU_URL, accessToken, singleItemInventory);
       console.log(`[ListingBuilder] SKU inventory PUT attempt ${attempt + 1}: ${skuRes.status}`);
       if (skuRes.ok) break;
-      if (skuRes.status !== 404) break;
+      // Retry on 404 (listing not yet consistent) and 409 (write conflict).
+      // Any other status (400 bad payload, 403 auth, etc.) is not retryable — log and bail.
+      const retryable = skuRes.status === 404 || skuRes.status === 409;
+      if (!retryable) {
+        const preview = await skuRes.clone().text().catch(() => "(unreadable)");
+        console.error(`[ListingBuilder] SKU PUT non-retryable ${skuRes.status} for listing ${listingId}:`, preview);
+        break;
+      }
     }
 
     if (!skuRes || !skuRes.ok) {

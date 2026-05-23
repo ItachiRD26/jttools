@@ -50,7 +50,15 @@ export async function POST(req: NextRequest) {
   // Get userId from API key
   const db      = getDb();
   const keySnap = await db.collection("apiKeys").doc(apiKey!).get();
-  const userId  = keySnap.data()?.userId as string;
+  const userId  = keySnap.data()?.userId as string | undefined;
+
+  if (!userId) {
+    console.error("[listings/create] apiKey doc exists but userId is missing:", apiKey);
+    return NextResponse.json(
+      { error: { code: "INTERNAL_ERROR", status: 500, message: "API key record is corrupt — userId missing. Contact support." } },
+      { status: 500, headers: corsHeaders() }
+    );
+  }
 
   if (body.state !== "draft") {
     // ── Preflight: verify all shops connected ─────────────────────────────
@@ -131,7 +139,23 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const result = await createListing(userId, apiKey!, body);
+  let result;
+  try {
+    result = await createListing(userId, apiKey!, body);
+  } catch (err) {
+    console.error("[listings/create] createListing threw:", err);
+    return NextResponse.json(
+      {
+        error: {
+          code:    "INTERNAL_ERROR",
+          status:  500,
+          message: err instanceof Error ? err.message : "Unexpected server error.",
+          hint:    "This is a JeterDev Tools server error, not an Etsy rejection. Contact support if it persists.",
+        },
+      },
+      { status: 500, headers: corsHeaders() }
+    );
+  }
 
   // Always return 200 with results[] so caller can inspect per-shop errors.
   // Use 500 only for catastrophic failures (not per-shop Etsy rejections).
