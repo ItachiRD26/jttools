@@ -401,9 +401,13 @@ function buildEtsyInventory(variations: VariationsConfig, basePrice: number, rea
     };
   });
 
-  // price_on_property: which property causes price variation
-  const priceOnProp  = allSamePrice  ? [] : [properties[0]?.property_id].filter(Boolean);
-  const skuOnProp    = allUniqueSkus ? [properties[0]?.property_id].filter(Boolean) : [];
+  // price_on_property / sku_on_property: must include ALL properties for N-property listings.
+  // Sending only properties[0] on a 2-property listing causes Etsy 400:
+  //   "price must be consistent across linked products" / SKU mismatch.
+  // Etsy accepts an array of property_ids — include every property that participates.
+  const allPropertyIds = properties.map(p => p.property_id).filter(Boolean);
+  const priceOnProp  = allSamePrice  ? [] : allPropertyIds;
+  const skuOnProp    = allUniqueSkus ? allPropertyIds : [];
 
   return { products, price_on_property: priceOnProp, quantity_on_property: [], sku_on_property: skuOnProp };
 }
