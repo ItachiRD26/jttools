@@ -543,6 +543,13 @@ async function setPersonalization(
   );
 }
 
+// Strip undefined/null values from warning objects before pushing to Firestore.
+// Firestore rejects documents containing undefined even on optional fields.
+// ignoreUndefinedProperties in getDb() is the primary guard; this is belt-and-suspenders.
+function sanitizeWarning(w: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(w).filter(([, v]) => v !== undefined));
+}
+
 // ─── Resolve readiness_state_id for a shop ───────────────────────────────────
 //
 // Priority order:
@@ -634,15 +641,27 @@ async function setVariationImages(
   // ROUND-TRIP: After inventory PUT, Etsy auto-assigns value_ids to custom property values.
   // We must GET /listings/{id}/inventory to read back the real value_ids before
   // building the variation-images payload (which only accepts numeric value_id >= 1).
+  //
+  // Etsy has a read-after-write consistency window — the value_ids may not be populated
+  // immediately after the PUT. Retry with backoff before declaring failure.
   let etsyValueIdMap: Record<string, number> = {}; // "1 Glazed Stem" → 12345678
 
-  try {
-    const invRes = await etsyRequest(
-      "GET",
-      `/application/listings/${listingId}/inventory`,
-      accessToken
-    );
-    if (invRes.ok) {
+  const invReadDelays = [500, 1500, 3000];
+  for (let attempt = 0; attempt <= invReadDelays.length; attempt++) {
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, invReadDelays[attempt - 1]));
+      console.log(`[ListingBuilder] Retrying inventory GET for value_ids (attempt ${attempt + 1}) on listing ${listingId}`);
+    }
+    try {
+      const invRes = await etsyRequest(
+        "GET",
+        `/application/listings/${listingId}/inventory`,
+        accessToken
+      );
+      if (!invRes.ok) {
+        console.warn(`[ListingBuilder] Inventory GET returned ${invRes.status} on attempt ${attempt + 1}`);
+        continue;
+      }
       const invData = await invRes.json();
       const products = invData.products ?? [];
       for (const product of products) {
@@ -657,10 +676,12 @@ async function setVariationImages(
           }
         }
       }
-      console.log(`[ListingBuilder] Read back ${Object.keys(etsyValueIdMap).length} value_ids from inventory`);
+      const readCount = Object.keys(etsyValueIdMap).length;
+      console.log(`[ListingBuilder] Read back ${readCount} value_ids from inventory (attempt ${attempt + 1})`);
+      if (readCount > 0) break; // got what we need
+    } catch (err) {
+      console.warn(`[ListingBuilder] Inventory GET threw on attempt ${attempt + 1}:`, err);
     }
-  } catch (err) {
-    console.warn(`[ListingBuilder] Could not read inventory for value_ids:`, err);
   }
 
   // Build variation-images payload with real Etsy value_ids
@@ -899,14 +920,14 @@ async function publishToShop(
       let skuErrBody: unknown;
       try { skuErrBody = JSON.parse(skuErrText); } catch { skuErrBody = skuErrText; }
       console.error(`[ListingBuilder] SKU inventory PUT failed for listing ${listingId}:`, JSON.stringify(skuErrBody));
-      warnings.push({
+      warnings.push(sanitizeWarning({
         code:        "SKU_SET_FAILED",
         fields:      "listing.sku",
         reason:      `SKU inventory PUT failed after ${skuDelays.length + 1} attempts`,
         etsy_error:  skuErrBody,
         etsy_status: skuRes!.status,
         payload_sent: singleItemInventory,
-      } as unknown as { code: string; fields: string; reason: string });
+      }) as unknown as { code: string; fields: string; reason: string });
     } else {
       console.log(`[ListingBuilder] SKU set for listing ${listingId}: ${body.listing.sku}`);
     }
@@ -936,14 +957,14 @@ async function publishToShop(
       let invErrBody: unknown;
       try { invErrBody = JSON.parse(invErrText); } catch { invErrBody = invErrText; }
       console.error(`[ListingBuilder] Inventory PUT failed for listing ${listingId}:`, JSON.stringify(invErrBody));
-      warnings.push({
+      warnings.push(sanitizeWarning({
         code:       "INVENTORY_SET_FAILED",
         fields:     "variations",
         reason:     `Inventory PUT failed after ${delays.length + 1} attempts`,
         etsy_error:  invErrBody,
         etsy_status: invRes!.status,
         inventory_payload_sent: inventory,
-      } as unknown as { code: string; fields: string; reason: string });
+      }) as unknown as { code: string; fields: string; reason: string });
     }
   } // end Path A
 
@@ -959,14 +980,14 @@ async function publishToShop(
     );
     if (!viResult.ok) {
       console.warn(`[ListingBuilder] Variation images failed for listing ${listingId}:`, viResult.etsy_error ?? viResult.error);
-      warnings.push({
+      warnings.push(sanitizeWarning({
         code:         "VARIATION_IMAGES_FAILED",
         fields:       "variations.variation_images",
         reason:       `Variation-images POST failed after ${4} attempts`,
         etsy_status:  viResult.etsy_status,
         etsy_error:   viResult.etsy_error,
         payload_sent: viResult.payload_sent,
-      } as unknown as { code: string; fields: string; reason: string });
+      }) as unknown as { code: string; fields: string; reason: string });
     } else {
       console.log(`[ListingBuilder] ✓ Variation images set for listing ${listingId}`);
     }

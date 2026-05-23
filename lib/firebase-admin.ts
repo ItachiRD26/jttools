@@ -32,6 +32,11 @@ export function getDb(): Firestore {
   if (!db) {
     getAdminApp();
     db = getFirestore();
+    // Silently skip undefined fields instead of throwing on Firestore writes.
+    // Without this, any warning object with an optional field that was never set
+    // (e.g. etsy_status on early-return paths in setVariationImages) crashes the
+    // entire job write and the user gets a 500 with no job_id to poll.
+    db.settings({ ignoreUndefinedProperties: true });
   }
   return db;
 }
