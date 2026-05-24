@@ -243,10 +243,15 @@ async function etsyRequest(
     for (const [key, val] of Object.entries(flat)) {
       if (val === undefined || val === null) continue;
       if (Array.isArray(val)) {
-        // Etsy v3's form parser expects repeated bare keys, NOT PHP bracket notation.
-        // tags=a&tags=b&tags=c  ← correct (all values preserved)
-        // tags[]=a&tags[]=b     ← wrong (Etsy reads "tags[]" as an unknown field)
-        val.forEach(v => params.append(key, String(v)));
+        // Etsy v3's form parser uses style: form, explode: false — i.e. a single
+        // field with COMMA-SEPARATED values. Verified empirically:
+        //   tags[]=a&tags[]=b  → only 1 value survives (Etsy reads "tags[]" as unknown)
+        //   tags=a&tags=b      → only 1 value survives (Etsy keeps one of the repeats)
+        //   tags=a,b,c         → all values survive ✓
+        // Confirmed via GET /v3/application/listings/{id} after publish: listing
+        // 4509975446 sent 13 tags via bare-repeated encoding and only kept 1.
+        // Etsy rejects commas inside individual tags at validation, so .join(",") is safe.
+        params.append(key, val.join(","));
       } else {
         params.append(key, String(val));
       }
@@ -508,21 +513,50 @@ async function uploadImageToListing(
 async function setCategoryAttributes(
   shopId: number, listingId: number,
   attrs: Record<string, CategoryAttribute>,
-  accessToken: string
+  accessToken: string,
+  warnings: Array<Record<string, unknown>>
 ) {
+  // Etsy's updateListingProperty endpoint expects application/x-www-form-urlencoded
+  // (same as createDraftListing) — sending JSON results in silent failures. And
+  // wrapping every PUT in Promise.allSettled without inspecting the result hides
+  // those failures entirely, so the user has no idea their category attributes
+  // didn't make it onto the listing. Capture into warnings[] so they surface.
   await Promise.allSettled(
-    Object.entries(attrs).map(([propertyId, attr]) =>
-      etsyRequest(
-        "PUT",
-        `/application/shops/${shopId}/listings/${listingId}/properties/${propertyId}`,
-        accessToken,
-        {
-          value_ids: attr.value_ids,
-          values:    attr.values,
-          ...(attr.scale_id ? { scale_id: attr.scale_id } : {}),
+    Object.entries(attrs).map(async ([propertyId, attr]) => {
+      try {
+        const res = await etsyRequest(
+          "PUT",
+          `/application/shops/${shopId}/listings/${listingId}/properties/${propertyId}`,
+          accessToken,
+          {
+            value_ids: attr.value_ids,
+            values:    attr.values,
+            ...(attr.scale_id ? { scale_id: attr.scale_id } : {}),
+          },
+          "form"
+        );
+        if (!res.ok) {
+          const text = await res.text();
+          let body: unknown; try { body = JSON.parse(text); } catch { body = text; }
+          console.error(`[ListingBuilder] PUT property ${propertyId} failed (${res.status}):`, JSON.stringify(body));
+          warnings.push({
+            code:         "CATEGORY_ATTRIBUTE_FAILED",
+            fields:       `category_attributes.${propertyId}`,
+            reason:       `Property update failed (Etsy ${res.status})`,
+            etsy_status:  res.status,
+            etsy_error:   body,
+            payload_sent: { value_ids: attr.value_ids, values: attr.values, scale_id: attr.scale_id },
+          });
         }
-      )
-    )
+      } catch (err) {
+        console.error(`[ListingBuilder] PUT property ${propertyId} threw:`, err);
+        warnings.push({
+          code:    "CATEGORY_ATTRIBUTE_FAILED",
+          fields:  `category_attributes.${propertyId}`,
+          reason:  `Property update threw: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    })
   );
 }
 
@@ -999,7 +1033,7 @@ async function publishToShop(
 
   // 5. Set category attributes
   if (body.category_attributes && Object.keys(body.category_attributes).length > 0) {
-    await setCategoryAttributes(shopId, listingId, body.category_attributes, accessToken);
+    await setCategoryAttributes(shopId, listingId, body.category_attributes, accessToken, warnings as Array<Record<string, unknown>>);
   }
 
   // 6. Set personalization
