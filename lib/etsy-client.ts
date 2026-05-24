@@ -38,13 +38,29 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
     url: `${ETSY_BASE}/application/listings/${listing_id}`,
   }),
 
-  "listings/active": ({ shop_id, limit = "25", offset = "0" }) => ({
-    method: "GET",
-    url: buildUrl(`${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/active`, {
-      limit,
-      offset,
-    }),
-  }),
+  // Path is historical — the slug stays "listings/active" but accepts ?state=draft
+  // as well as the default state=active. Rename can happen later if a third state
+  // (inactive/expired/sold_out) ever lands; for now keep this stable to avoid
+  // breaking existing consumers. Default limit bumped 25 → 100 because draft
+  // shops can have 1000+ rows and the consumer wants to paginate in fewer hops.
+  // Etsy returns { count, results, pagination } natively — we pass through as-is.
+  // modified_since (unix seconds) is forwarded to Etsy's last_modified_tsz_min
+  // for incremental syncs; ignored by Etsy if the underlying endpoint doesn't
+  // support it (consumer can fall back to per-row last_modified_timestamp).
+  "listings/active": ({ shop_id, state, limit = "100", offset = "0", modified_since }) => {
+    // Only "active" and "draft" — explicitly exclude inactive/expired/sold_out
+    // because consumer's catalog only wants live + pre-publish items.
+    const stateSegment = state === "draft" ? "draft" : "active";
+    const qs: Record<string, string | undefined> = { limit, offset };
+    if (modified_since) qs.last_modified_tsz_min = modified_since;
+    return {
+      method: "GET",
+      url: buildUrl(
+        `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${stateSegment}`,
+        qs
+      ),
+    };
+  },
 
   "listings/featured": ({ shop_id }) => ({
     method: "GET",

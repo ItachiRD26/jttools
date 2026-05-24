@@ -57,9 +57,19 @@ async function handler(
   // ── 2. Resolve OAuth token for private endpoints ───────────────────────────
   // The bridge looks up the token from the shop_id automatically.
   // Developer only passes shop_id — no token handling on their side.
+  //
+  // Special case for listings/active?state=draft: Etsy's draft listings
+  // endpoint requires OAuth (listings_r scope), unlike the public active
+  // endpoint which only needs the API key. Bucketing both under the same
+  // route means we have to upgrade the auth conditionally based on the
+  // state= query param. Connected shops already have listings_r from the
+  // existing OAuth grant — no re-auth needed.
   let accessToken: string | undefined;
 
-  if (OAUTH_REQUIRED.has(endpoint)) {
+  const stateParam = req.nextUrl.searchParams.get("state");
+  const needsOAuthForDraft = endpoint === "listings/active" && stateParam === "draft";
+
+  if (OAUTH_REQUIRED.has(endpoint) || needsOAuthForDraft) {
     const searchParams = req.nextUrl.searchParams;
     const shopId = searchParams.get("shop_id");
 
