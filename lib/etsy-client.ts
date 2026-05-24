@@ -45,20 +45,34 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
   // shops can have 1000+ rows and the consumer wants to paginate in fewer hops.
   // Etsy returns { count, results, pagination } natively — we pass through as-is.
   // modified_since (unix seconds) is forwarded to Etsy's last_modified_tsz_min
-  // for incremental syncs; ignored by Etsy if the underlying endpoint doesn't
-  // support it (consumer can fall back to per-row last_modified_timestamp).
+  // for incremental syncs.
+  //
+  // URL bifurcation by state is deliberate:
+  //   state=active → hit Etsy's dedicated /listings/active path (NO OAuth required,
+  //                  public endpoint). Preserves backward compat for existing
+  //                  consumers who call this slug without OAuth headers.
+  //   state=draft  → hit Etsy's generic /listings?state=draft (REQUIRES OAuth,
+  //                  listings_r scope). The dedicated /listings/draft path
+  //                  doesn't exist on Etsy v3 — verified by probe (404 "Resource
+  //                  not found"). Route handler upgrades auth conditionally for
+  //                  this state; see app/api/v1/[...path]/route.ts.
   "listings/active": ({ shop_id, state, limit = "100", offset = "0", modified_since }) => {
-    // Only "active" and "draft" — explicitly exclude inactive/expired/sold_out
-    // because consumer's catalog only wants live + pre-publish items.
-    const stateSegment = state === "draft" ? "draft" : "active";
+    const sid = requireShopId(shop_id);
     const qs: Record<string, string | undefined> = { limit, offset };
     if (modified_since) qs.last_modified_tsz_min = modified_since;
+    if (state === "draft") {
+      qs.state = "draft";
+      return {
+        method: "GET",
+        url: buildUrl(`${ETSY_BASE}/application/shops/${sid}/listings`, qs),
+      };
+    }
+    // Default / state=active: keep the public path. Any other state value
+    // (inactive/expired/sold_out) silently falls through to active — spec
+    // explicitly excludes those from the consumer's catalog.
     return {
       method: "GET",
-      url: buildUrl(
-        `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${stateSegment}`,
-        qs
-      ),
+      url: buildUrl(`${ETSY_BASE}/application/shops/${sid}/listings/active`, qs),
     };
   },
 
