@@ -1129,23 +1129,30 @@ function ListingCreate() {
         <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">Array field serialization</p>
         <p className="text-xs text-white/50 leading-relaxed">
           Fields that accept multiple values — <code className="font-mono bg-white/6 px-1 rounded">tags</code>, <code className="font-mono bg-white/6 px-1 rounded">materials</code>, <code className="font-mono bg-white/6 px-1 rounded">styles</code>, <code className="font-mono bg-white/6 px-1 rounded">production_partner_ids</code> — must be sent
-          to Etsy using bracket notation in the form-encoded body. The bridge handles this automatically.
+          to Etsy as a single field with comma-separated values (per the v3 OpenAPI spec: <code className="font-mono bg-white/6 px-1 rounded">style: form, explode: false</code>). The bridge handles this automatically.
         </p>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <div>
-            <p className="text-[10px] font-mono text-red-400/60 uppercase tracking-widest mb-1.5">Wrong — bare duplicate keys</p>
-            <CodeBlock code={`tags=vintage+tee&tags=band+shirt&tags=cotton`} />
-            <p className="text-[10px] text-white/30 mt-1.5">Etsy picks one value arbitrarily — the rest are silently dropped.</p>
+            <p className="text-[10px] font-mono text-red-400/60 uppercase tracking-widest mb-1.5">Wrong — bracket notation</p>
+            <CodeBlock code={`tags[]=vintage+tee&tags[]=band+shirt`} />
+            <p className="text-[10px] text-white/30 mt-1.5">Etsy reads the field name as the literal string <code className="font-mono">tags[]</code>, doesn&apos;t recognize it, drops everything.</p>
           </div>
           <div>
-            <p className="text-[10px] font-mono text-emerald-400/60 uppercase tracking-widest mb-1.5">Correct — bracket notation</p>
-            <CodeBlock code={`tags[]=vintage+tee&tags[]=band+shirt&tags[]=cotton`} />
-            <p className="text-[10px] text-white/30 mt-1.5">All values preserved. The bridge uses this format on every request.</p>
+            <p className="text-[10px] font-mono text-red-400/60 uppercase tracking-widest mb-1.5">Wrong — bare repeated keys</p>
+            <CodeBlock code={`tags=vintage+tee&tags=band+shirt`} />
+            <p className="text-[10px] text-white/30 mt-1.5">Etsy keeps exactly one value — the rest are silently dropped.</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-mono text-emerald-400/60 uppercase tracking-widest mb-1.5">Correct — comma-separated</p>
+            <CodeBlock code={`tags=vintage+tee,band+shirt,cotton`} />
+            <p className="text-[10px] text-white/30 mt-1.5">All values preserved. Etsy rejects commas inside individual tag values at validation, so this is unambiguous.</p>
           </div>
         </div>
         <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
           <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest mb-1">If you were seeing truncated tags or materials</p>
-          <p className="text-xs text-white/50 leading-relaxed">This was a serialization bug where the bridge sent bare duplicate keys instead of bracket notation. Etsy's parser kept one value arbitrarily — not always the first, not always the last. Fixed in the current version. Re-publish any affected listings.</p>
+          <p className="text-xs text-white/50 leading-relaxed">
+            Two prior serialization formats — bracket notation (<code className="font-mono">tags[]=a&amp;tags[]=b</code>) and bare repeated keys (<code className="font-mono">tags=a&amp;tags=b</code>) — both caused Etsy&apos;s form parser to keep at most one value. The bridge now sends comma-separated values in a single field, which is what Etsy&apos;s v3 spec actually expects. Re-publish any listings published before this fix to recover the missing tags / materials / styles.
+          </p>
         </div>
       </div>
     </div>

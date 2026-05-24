@@ -540,7 +540,7 @@ async function setCategoryAttributes(
           let body: unknown; try { body = JSON.parse(text); } catch { body = text; }
           console.error(`[ListingBuilder] PUT property ${propertyId} failed (${res.status}):`, JSON.stringify(body));
           warnings.push({
-            code:         "CATEGORY_ATTRIBUTE_FAILED",
+            code:         "ATTRIBUTES_SET_FAILED",
             fields:       `category_attributes.${propertyId}`,
             reason:       `Property update failed (Etsy ${res.status})`,
             etsy_status:  res.status,
@@ -551,7 +551,7 @@ async function setCategoryAttributes(
       } catch (err) {
         console.error(`[ListingBuilder] PUT property ${propertyId} threw:`, err);
         warnings.push({
-          code:    "CATEGORY_ATTRIBUTE_FAILED",
+          code:    "ATTRIBUTES_SET_FAILED",
           fields:  `category_attributes.${propertyId}`,
           reason:  `Property update threw: ${err instanceof Error ? err.message : String(err)}`,
         });
