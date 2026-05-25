@@ -921,9 +921,15 @@ async function publishToShop(
         offerings: [{
           // Inventory PUT expects a plain float, not a money object.
           // Same fix as the variations path — amount/divisor = float.
-          price:      parseFloat((body.listing.price ?? 0).toFixed(2)),
-          quantity:   body.listing.quantity ?? 1,
-          is_enabled: true,
+          price:              parseFloat((body.listing.price ?? 0).toFixed(2)),
+          quantity:           body.listing.quantity ?? 1,
+          is_enabled:         true,
+          // Etsy requires readiness_state_id on EVERY offering — without it
+          // the inventory PUT returns 400 "All offerings need readiness state".
+          // The variations path at line ~403 already supplies this; the
+          // single-item path used to omit it, which is why this 400 only
+          // surfaced on no-variation listings.
+          readiness_state_id: readinessStateId,
         }],
       }],
       price_on_property:    [],
