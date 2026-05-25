@@ -122,10 +122,18 @@ export interface StoreConnection {
   refreshToken:       string;
   expiresAt:          Date | FirebaseFirestore.Timestamp;
   connectedAt:        FirebaseFirestore.FieldValue | FirebaseFirestore.Timestamp;
-  // Set to true when a refresh attempt fails (revoked, expired refresh token, etc.)
-  // Cleared back to false on successful reconnect via saveStoreConnection.
+  // Set to true when a refresh attempt fails permanently (refresh token
+  // revoked / expired). Cleared on successful reconnect via saveStoreConnection
+  // OR on successful recovery refresh.
   connection_expired?: boolean;
-  expiredAt?:          FirebaseFirestore.FieldValue | FirebaseFirestore.Timestamp;
+  expiredAt?:          FirebaseFirestore.FieldValue | FirebaseFirestore.Timestamp | null;
+  // Refresh telemetry — populated by getValidAccessToken's refresh path so
+  // we can observe transient-vs-permanent failures and trigger the recovery
+  // path (allow one refresh attempt per hour even on expired shops).
+  lastRefreshError?:      string | null;
+  lastRefreshAttemptAt?:  FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
+  lastRefreshSuccessAt?:  FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
+  refreshFailureCount?:   number;
 }
 
 export async function saveStoreConnection(
@@ -299,8 +307,9 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
   // more than an hour ago — gives transient-failure-flagged shops a chance
   // to self-heal without forcing the user to reconnect.
   if (connection.connection_expired) {
-    const lastAttempt = (connection as Record<string, unknown>).lastRefreshAttemptAt as
+    const lastAttempt = connection.lastRefreshAttemptAt as
       | FirebaseFirestore.Timestamp
+      | null
       | undefined;
     const lastAttemptDate = lastAttempt?.toDate?.() ?? new Date(0);
     const sinceLastAttempt = Date.now() - lastAttemptDate.getTime();
@@ -386,8 +395,7 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
         `(permanent=${isPermanent}, etsyCode=${etsyCode}):`, errMsg
       );
 
-      const failureCount =
-        ((connection as Record<string, unknown>).refreshFailureCount as number | undefined ?? 0) + 1;
+      const failureCount = (connection.refreshFailureCount ?? 0) + 1;
 
       if (isPermanent) {
         await ref.update({
