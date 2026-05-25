@@ -107,9 +107,10 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
     { method: "GET",    path: "/listings/get",        description: "Retrieve a single listing by Etsy listing ID.",
       params: [{ name:"listing_id",type:"string",required:true,description:"Etsy listing ID" }],
       example: `curl "https://jeterdev.tools/api/v1/listings/get?listing_id=1234567890" -H "x-api-key: jt_YOUR_KEY"` },
-    { method: "GET",    path: "/listings/active",     description: "Get all active listings for a shop.",
-      params: [{ name:"shop_id",type:"string",required:true,description:"Etsy shop ID" },{ name:"limit",type:"integer",required:false,description:"Max 100" },{ name:"offset",type:"integer",required:false,description:"Pagination offset" }],
-      example: `curl "https://jeterdev.tools/api/v1/listings/active?shop_id=61004439&limit=25" -H "x-api-key: jt_YOUR_KEY"` },
+    { method: "GET",    path: "/listings/active",     description: "Get listings for a shop. Default returns active (public). Pass state=draft to fetch drafts (requires Etsy shop connection + listings_r scope). Supports incremental sync via modified_since.",
+      params: [{ name:"shop_id",type:"string",required:true,description:"Etsy shop ID" },{ name:"state",type:"string",required:false,description:"active (default, public) · draft (Pro+, OAuth required)" },{ name:"modified_since",type:"integer",required:false,description:"Unix seconds. Only return listings modified at or after this timestamp (forwarded to Etsy's last_modified_tsz_min)." },{ name:"limit",type:"integer",required:false,description:"Max 100. Default 100." },{ name:"offset",type:"integer",required:false,description:"Pagination offset" }],
+      example: `curl "https://jeterdev.tools/api/v1/listings/active?shop_id=61004439&state=draft&limit=100" -H "x-api-key: jt_YOUR_KEY"`,
+      response: `{"count":342,"results":[{"listing_id":1234567890,"title":"Handmade Ceramic Mug","state":"draft","last_modified_tsz":1716508800,...}],"pagination":{"effective_limit":100,"effective_offset":0,"next_offset":100}}` },
     { method: "GET",    path: "/listings/featured",   description: "Get featured listings for a shop.",
       params: [{ name:"shop_id",type:"string",required:true,description:"Etsy shop ID" }],
       example: `curl "https://jeterdev.tools/api/v1/listings/featured?shop_id=61004439" -H "x-api-key: jt_YOUR_KEY"` },
@@ -551,13 +552,13 @@ function StoreConnection() {
         <h1 className="text-2xl font-semibold tracking-tight text-white mb-3">Store Connection</h1>
         <p className="text-sm text-white/50 leading-relaxed">Endpoints that access your own shop data require a connected Etsy store. Each user authenticates independently — your data is completely isolated from other users. Store connection uses OAuth 2.0 with PKCE and must be done through the dashboard.</p>
       </div>
-      <InfoBox>Once connected, JeterDev Tools manages credential refresh automatically. There is no API endpoint for connecting a store.</InfoBox>
+      <InfoBox>Once connected, JeterDev Tools manages credential refresh automatically — both on-demand and on an hourly background job. There is no API endpoint for connecting a store.</InfoBox>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="bg-white/3 border border-white/6 rounded-xl p-4">
           <p className="text-xs font-mono text-white/40 uppercase mb-1">Access token</p>
           <p className="text-sm font-semibold text-white">1 hour</p>
-          <p className="text-xs text-white/30 mt-1">Auto-refreshed transparently. You never notice this.</p>
+          <p className="text-xs text-white/30 mt-1">Refreshed on-demand before each call, and proactively by an hourly cron for any shop within 90 minutes of expiry. Keeps idle shops alive so the 90-day refresh window never lapses silently.</p>
         </div>
         <div className="bg-white/3 border border-white/6 rounded-xl p-4">
           <p className="text-xs font-mono text-white/40 uppercase mb-1">Refresh token</p>
@@ -596,7 +597,7 @@ function StoreConnection() {
       </div>
       <div>
         <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Error if token expired</p>
-        <p className="text-xs text-white/40 mb-2 leading-relaxed">When Etsy revokes a refresh token (user revoked access, token aged out, etc.), the bridge marks the shop <code className="font-mono bg-white/6 px-1 rounded">connection_expired: true</code> in Firestore and all subsequent calls for that shop return this error immediately without retrying the upstream.</p>
+        <p className="text-xs text-white/40 mb-2 leading-relaxed">When a refresh fails, the bridge differentiates <span className="text-white/70">permanent</span> failures (Etsy 400/401 — token revoked, user un-authorized the app, refresh token aged out) from <span className="text-white/70">transient</span> ones (5xx, network errors). Both flip <code className="font-mono bg-white/6 px-1 rounded">connection_expired: true</code> and return the error below — but transient failures auto-heal: the hourly cron retries each marked shop once per hour, so a brief Etsy outage clears itself without forcing your user to reconnect. Permanent failures stay marked until the user re-links.</p>
         <CodeBlock code={`{\n  "error": {\n    "code": "STORE_TOKEN_EXPIRED",\n    "status": 403,\n    "message": "Shop 61004439 OAuth token has expired and could not be refreshed. Re-link the shop to restore access.",\n    "connection_expired": true,\n    "hint": "Re-connect the shop at jeterdev.tools/dashboard."\n  }\n}`} lang="json" />
         <div className="mt-3 bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
           <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest mb-2">How to detect proactively</p>
@@ -630,7 +631,7 @@ function Errors() {
     { code:"ENDPOINT_NOT_IN_PLAN",    status:403, desc:"Endpoint not available on your current plan.",        hint:"Upgrade at jeterdev.tools/pricing." },
     { code:"STORE_NOT_CONNECTED",     status:403, desc:"No Firestore doc for this shop — it was never linked or was deleted.", hint:"Connect at jeterdev.tools/dashboard." },
     { code:"STORE_NOT_OWNED",         status:403, desc:"shop_id belongs to a different user account.",        hint:"Use a shop_id returned by GET /stores." },
-    { code:"STORE_TOKEN_EXPIRED",     status:403, desc:"Refresh failed — token revoked or expired. connection_expired:true is set on the store entry.", hint:"Re-link the shop at jeterdev.tools/dashboard. Poll GET /stores and check connection_expired." },
+    { code:"STORE_TOKEN_EXPIRED",     status:403, desc:"Refresh failed — token revoked, expired, or upstream transient error. connection_expired:true is set on the store entry; transient failures auto-retry hourly and may self-heal.", hint:"Re-link the shop at jeterdev.tools/dashboard. Poll GET /stores and check connection_expired." },
     { code:"ENDPOINT_NOT_FOUND",      status:404, desc:"This endpoint does not exist.",                      hint:"Check the path against the docs." },
     { code:"RATE_LIMIT_DAILY",        status:429, desc:"Daily request limit reached.",                       hint:"Limit resets at midnight UTC. Retry-After header included." },
     { code:"RATE_LIMIT_SECOND",       status:429, desc:"Per-second rate limit exceeded.",                    hint:"Wait the Retry-After seconds before retrying." },
@@ -1154,6 +1155,30 @@ function ListingCreate() {
             Two prior serialization formats — bracket notation (<code className="font-mono">tags[]=a&amp;tags[]=b</code>) and bare repeated keys (<code className="font-mono">tags=a&amp;tags=b</code>) — both caused Etsy&apos;s form parser to keep at most one value. The bridge now sends comma-separated values in a single field, which is what Etsy&apos;s v3 spec actually expects. Re-publish any listings published before this fix to recover the missing tags / materials / styles.
           </p>
         </div>
+      </div>
+      <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-3">
+        <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">SKU uniqueness</p>
+        <p className="text-xs text-white/50 leading-relaxed">
+          Etsy requires every SKU on a listing to be distinct. For variation offerings, each <code className="font-mono bg-white/6 px-1 rounded">sku</code> in the <code className="font-mono bg-white/6 px-1 rounded">offerings</code> array must be unique within the listing — otherwise Etsy returns <code className="font-mono bg-white/6 px-1 rounded">400 sku must be consistent across all products</code> and the inventory PUT fails, surfacing as an <code className="font-mono bg-white/6 px-1 rounded">INVENTORY_SET_FAILED</code> warning. The bridge does not de-duplicate for you; collisions are caller-side bugs.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-[10px] font-mono text-red-400/60 uppercase tracking-widest mb-1.5">Wrong — duplicate SKU across offerings</p>
+            <CodeBlock code={`[\n  { "color": "Celadon", "fabric": "Linen",    "sku": "CEL-CL" },\n  { "color": "Celadon", "fabric": "Pleated",  "sku": "CEL-CL" }\n]`} lang="json" />
+            <p className="text-[10px] text-white/30 mt-1.5">Two offerings share <code className="font-mono">CEL-CL</code>. Etsy 400.</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-mono text-emerald-400/60 uppercase tracking-widest mb-1.5">Correct — every SKU distinct</p>
+            <CodeBlock code={`[\n  { "color": "Celadon", "fabric": "Linen",    "sku": "CEL-LIN" },\n  { "color": "Celadon", "fabric": "Pleated",  "sku": "CEL-PLT" }\n]`} lang="json" />
+            <p className="text-[10px] text-white/30 mt-1.5">Distinct SKUs accepted. Inventory PUT succeeds.</p>
+          </div>
+        </div>
+      </div>
+      <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-2">
+        <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">Single-item SKU + readiness state</p>
+        <p className="text-xs text-white/50 leading-relaxed">
+          When you pass a top-level <code className="font-mono bg-white/6 px-1 rounded">listing.sku</code> on a no-variations listing, the bridge writes it via the inventory PUT (Etsy v3 ignores <code className="font-mono bg-white/6 px-1 rounded">sku</code> on listing create). Etsy now requires <code className="font-mono bg-white/6 px-1 rounded">readiness_state_id</code> on every offering in that PUT — the bridge attaches the listing&apos;s resolved processing profile automatically, so callers don&apos;t need to thread it through. If you see <code className="font-mono bg-white/6 px-1 rounded">SKU_SET_FAILED</code> with <code className="font-mono bg-white/6 px-1 rounded">&quot;All offerings need readiness state&quot;</code> in the etsy_error, you&apos;re on an older bridge build — the latest release fixes this.
+        </p>
       </div>
     </div>
   );
