@@ -65,6 +65,36 @@ export async function exchangeCodeForTokens(code: string, codeVerifier: string):
   return res.json();
 }
 
+// Thrown by refreshAccessToken with a parsed shape so callers can differentiate
+// permanent failures (refresh token dead → user must reconnect) from transient
+// ones (Etsy 5xx → safe to retry later).
+export class RefreshTokenError extends Error {
+  status:      number;
+  etsyCode:    string | null; // e.g. "invalid_grant", "invalid_request"
+  isPermanent: boolean;
+  constructor(status: number, body: unknown) {
+    const bodyObj = (body ?? {}) as Record<string, unknown>;
+    const etsyCode = typeof bodyObj.error === "string" ? bodyObj.error : null;
+    // OAuth 2.0 spec — these mean the refresh token is dead and no retry will help
+    const permanentCodes = new Set([
+      "invalid_grant",
+      "invalid_request",
+      "invalid_client",
+      "unauthorized_client",
+      "unsupported_grant_type",
+    ]);
+    const isPermanent =
+      (etsyCode !== null && permanentCodes.has(etsyCode)) ||
+      // 401/403 from Etsy's token endpoint = revoked/invalid grant
+      status === 401 || status === 403;
+    super(`Refresh failed (${status}, ${etsyCode ?? "no-error-code"}): ${JSON.stringify(body)}`);
+    this.name        = "RefreshTokenError";
+    this.status      = status;
+    this.etsyCode    = etsyCode;
+    this.isPermanent = isPermanent;
+  }
+}
+
 export async function refreshAccessToken(refreshToken: string): Promise<EtsyTokens> {
   const res = await fetch("https://api.etsy.com/v3/public/oauth/token", {
     method: "POST",
@@ -73,7 +103,10 @@ export async function refreshAccessToken(refreshToken: string): Promise<EtsyToke
       grant_type: "refresh_token", client_id: CLIENT_ID, refresh_token: refreshToken,
     }),
   });
-  if (!res.ok) throw new Error(`Token refresh failed: ${JSON.stringify(await res.json().catch(() => ({})))}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new RefreshTokenError(res.status, body);
+  }
   return res.json();
 }
 
@@ -247,6 +280,13 @@ async function withRefreshLock<T>(
   }
 }
 
+// Recovery cooldown — if a shop is marked connection_expired, allow ONE
+// refresh attempt per hour. A transient failure that flipped the flag will
+// self-heal on next access; a truly dead refresh token will keep failing
+// (permanently) and won't burn rate limit beyond once per hour. Without
+// this, a single 5xx from Etsy's token endpoint requires a full user reconnect.
+const EXPIRED_RECOVERY_INTERVAL_MS = 60 * 60 * 1000;
+
 export async function getValidAccessToken(userId: string, shopId: string): Promise<string> {
   const db         = getDb();
   const connection = await getStoreConnection(userId, shopId);
@@ -255,8 +295,28 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
     throw new StoreNotConnectedError(shopId);
   }
 
+  // Shop is currently marked expired. Try recovery if the last attempt was
+  // more than an hour ago — gives transient-failure-flagged shops a chance
+  // to self-heal without forcing the user to reconnect.
   if (connection.connection_expired) {
-    throw new StoreTokenExpiredError(shopId);
+    const lastAttempt = (connection as Record<string, unknown>).lastRefreshAttemptAt as
+      | FirebaseFirestore.Timestamp
+      | undefined;
+    const lastAttemptDate = lastAttempt?.toDate?.() ?? new Date(0);
+    const sinceLastAttempt = Date.now() - lastAttemptDate.getTime();
+
+    if (sinceLastAttempt < EXPIRED_RECOVERY_INTERVAL_MS) {
+      // Too soon since last attempt — caller still needs to reconnect
+      throw new StoreTokenExpiredError(shopId);
+    }
+
+    console.log(
+      `[OAuth] Shop ${shopId} marked expired but ${Math.round(sinceLastAttempt / 60000)}min ` +
+      `since last attempt — trying recovery refresh`
+    );
+    // Fall through to the refresh path; the refresh attempt below will either
+    // succeed (clears connection_expired) or fail (updates lastRefreshAttemptAt
+    // so the next call will be gated by the hour cooldown).
   }
 
   const now       = new Date();
@@ -267,12 +327,12 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
   const timeToExpiry = expiresAt.getTime() - now.getTime();
   console.log(`[OAuth] Shop ${shopId} token expires in ${Math.round(timeToExpiry / 60000)}min`);
 
-  if (timeToExpiry >= 5 * 60 * 1000) {
-    // Token still valid — return immediately, no lock needed
+  if (timeToExpiry >= 5 * 60 * 1000 && !connection.connection_expired) {
+    // Token still valid AND not marked expired — return immediately, no lock needed
     return connection.accessToken;
   }
 
-  // Token near expiry — acquire distributed lock before refreshing
+  // Token near expiry OR shop in recovery — acquire distributed lock before refreshing
   return withRefreshLock(userId, shopId, async () => {
     // Re-read inside the lock: another process may have already refreshed
     const fresh = await getStoreConnection(userId, shopId);
@@ -282,7 +342,7 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
       ? fresh.expiresAt
       : (fresh.expiresAt as FirebaseFirestore.Timestamp).toDate();
 
-    if (freshExpiresAt.getTime() - Date.now() >= 5 * 60 * 1000) {
+    if (freshExpiresAt.getTime() - Date.now() >= 5 * 60 * 1000 && !fresh.connection_expired) {
       console.log(`[OAuth] Shop ${shopId} already refreshed by another process`);
       return fresh.accessToken;
     }
@@ -299,24 +359,68 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
       const newExpiresAt = new Date(Date.now() + newTokens.expires_in * 1000);
 
       await ref.update({
-        accessToken:        newTokens.access_token,
-        refreshToken:       newTokens.refresh_token,
-        expiresAt:          newExpiresAt,
-        connection_expired: false,
-        expiredAt:          null,
+        accessToken:           newTokens.access_token,
+        refreshToken:          newTokens.refresh_token,
+        expiresAt:             newExpiresAt,
+        connection_expired:    false,
+        expiredAt:             null,
+        lastRefreshError:      null,
+        lastRefreshAttemptAt:  FieldValue.serverTimestamp(),
+        lastRefreshSuccessAt:  FieldValue.serverTimestamp(),
+        refreshFailureCount:   0,
       });
 
       console.log(`[OAuth] Shop ${shopId} token refreshed, expires in ${newTokens.expires_in}s`);
       return newTokens.access_token;
     } catch (refreshErr) {
-      console.error(`[OAuth] Refresh failed for shop ${shopId}:`, refreshErr);
+      // Differentiate permanent (refresh token dead, user must reconnect) from
+      // transient (Etsy 5xx, network blip, momentary rate limit — safe to retry
+      // later). Only flip connection_expired on permanent — transient failures
+      // get logged and the shop stays in a recoverable state.
+      const isPermanent = refreshErr instanceof RefreshTokenError && refreshErr.isPermanent;
+      const errMsg      = refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
+      const etsyCode    = refreshErr instanceof RefreshTokenError ? refreshErr.etsyCode : null;
+
+      console.error(
+        `[OAuth] Refresh failed for shop ${shopId} ` +
+        `(permanent=${isPermanent}, etsyCode=${etsyCode}):`, errMsg
+      );
+
+      const failureCount =
+        ((connection as Record<string, unknown>).refreshFailureCount as number | undefined ?? 0) + 1;
+
+      if (isPermanent) {
+        await ref.update({
+          connection_expired:    true,
+          expiredAt:             FieldValue.serverTimestamp(),
+          lastRefreshError:      errMsg,
+          lastRefreshAttemptAt:  FieldValue.serverTimestamp(),
+          refreshFailureCount:   failureCount,
+        });
+        throw new StoreTokenExpiredError(shopId);
+      }
+
+      // Transient — don't burn the connection. Log + bump attempt timestamp
+      // so the recovery cooldown ticks. Caller can retry. After 5+ consecutive
+      // transient failures we DO mark expired as a circuit breaker (otherwise
+      // a permanently-broken Etsy endpoint would never stop trying).
+      const TRANSIENT_FAILURE_BREAKER = 5;
+      const shouldBreakOpen = failureCount >= TRANSIENT_FAILURE_BREAKER;
 
       await ref.update({
-        connection_expired: true,
-        expiredAt:          FieldValue.serverTimestamp(),
+        connection_expired:    shouldBreakOpen,
+        expiredAt:             shouldBreakOpen ? FieldValue.serverTimestamp() : null,
+        lastRefreshError:      errMsg,
+        lastRefreshAttemptAt:  FieldValue.serverTimestamp(),
+        refreshFailureCount:   failureCount,
       });
 
-      throw new StoreTokenExpiredError(shopId);
+      if (shouldBreakOpen) {
+        console.warn(`[OAuth] Shop ${shopId} hit ${TRANSIENT_FAILURE_BREAKER} consecutive transient failures — marking expired`);
+        throw new StoreTokenExpiredError(shopId);
+      }
+
+      throw refreshErr;
     }
   });
 }
