@@ -295,9 +295,20 @@ async function withRefreshLock<T>(
 // this, a single 5xx from Etsy's token endpoint requires a full user reconnect.
 const EXPIRED_RECOVERY_INTERVAL_MS = 60 * 60 * 1000;
 
-export async function getValidAccessToken(userId: string, shopId: string): Promise<string> {
+// On-demand refresh threshold. Tokens with less than this headroom are
+// refreshed before being handed back. Bumped from 5min to 30min so the
+// dashboard never shows the amber "Token expired" state during normal
+// hourly cycling — the cron refreshes well before the user-visible window.
+const ON_DEMAND_REFRESH_THRESHOLD_MS = 30 * 60 * 1000;
+
+export async function getValidAccessToken(
+  userId: string,
+  shopId: string,
+  opts?: { force?: boolean },
+): Promise<string> {
   const db         = getDb();
   const connection = await getStoreConnection(userId, shopId);
+  const force      = opts?.force === true;
 
   if (!connection) {
     throw new StoreNotConnectedError(shopId);
@@ -306,7 +317,9 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
   // Shop is currently marked expired. Try recovery if the last attempt was
   // more than an hour ago — gives transient-failure-flagged shops a chance
   // to self-heal without forcing the user to reconnect.
-  if (connection.connection_expired) {
+  // force=true bypasses the cooldown — cron callers have already gated this
+  // at the query level and want the refresh attempt now.
+  if (connection.connection_expired && !force) {
     const lastAttempt = connection.lastRefreshAttemptAt as
       | FirebaseFirestore.Timestamp
       | null
@@ -336,14 +349,17 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
   const timeToExpiry = expiresAt.getTime() - now.getTime();
   console.log(`[OAuth] Shop ${shopId} token expires in ${Math.round(timeToExpiry / 60000)}min`);
 
-  if (timeToExpiry >= 5 * 60 * 1000 && !connection.connection_expired) {
+  if (!force && timeToExpiry >= ON_DEMAND_REFRESH_THRESHOLD_MS && !connection.connection_expired) {
     // Token still valid AND not marked expired — return immediately, no lock needed
     return connection.accessToken;
   }
 
-  // Token near expiry OR shop in recovery — acquire distributed lock before refreshing
+  // Token near expiry OR shop in recovery OR caller forced refresh —
+  // acquire distributed lock before refreshing
   return withRefreshLock(userId, shopId, async () => {
-    // Re-read inside the lock: another process may have already refreshed
+    // Re-read inside the lock: another process may have already refreshed.
+    // Even with force=true, honour a fresh token written by a concurrent
+    // refresher — the goal is "token is fresh," not "I personally refreshed it."
     const fresh = await getStoreConnection(userId, shopId);
     if (!fresh) throw new StoreNotConnectedError(shopId);
 
@@ -351,7 +367,7 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
       ? fresh.expiresAt
       : (fresh.expiresAt as FirebaseFirestore.Timestamp).toDate();
 
-    if (freshExpiresAt.getTime() - Date.now() >= 5 * 60 * 1000 && !fresh.connection_expired) {
+    if (freshExpiresAt.getTime() - Date.now() >= ON_DEMAND_REFRESH_THRESHOLD_MS && !fresh.connection_expired) {
       console.log(`[OAuth] Shop ${shopId} already refreshed by another process`);
       return fresh.accessToken;
     }
@@ -367,7 +383,11 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
       const newTokens    = await refreshAccessToken(fresh.refreshToken);
       const newExpiresAt = new Date(Date.now() + newTokens.expires_in * 1000);
 
-      await ref.update({
+      // CRITICAL: Etsy rotates refresh tokens — after this call, fresh.refreshToken
+      // is invalid. If we fail to persist newTokens.refresh_token, the shop is
+      // permanently broken (no path back without user reconnect). Retry the write
+      // with exponential backoff before giving up.
+      const update = {
         accessToken:           newTokens.access_token,
         refreshToken:          newTokens.refresh_token,
         expiresAt:             newExpiresAt,
@@ -377,7 +397,29 @@ export async function getValidAccessToken(userId: string, shopId: string): Promi
         lastRefreshAttemptAt:  FieldValue.serverTimestamp(),
         lastRefreshSuccessAt:  FieldValue.serverTimestamp(),
         refreshFailureCount:   0,
-      });
+      };
+      let writeErr: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await ref.update(update);
+          writeErr = null;
+          break;
+        } catch (err) {
+          writeErr = err;
+          console.warn(`[OAuth] Shop ${shopId} post-refresh write attempt ${attempt + 1} failed:`, err);
+          if (attempt < 2) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        }
+      }
+      if (writeErr) {
+        // Tokens are now permanently lost on our side. Log loudly so it's
+        // visible in observability, then re-throw so the caller sees a failure
+        // instead of a misleading success.
+        console.error(
+          `[OAuth] FATAL: refresh succeeded at Etsy but Firestore write failed 3x for shop ${shopId} — ` +
+          `new refresh token is lost, user must reconnect:`, writeErr
+        );
+        throw writeErr;
+      }
 
       console.log(`[OAuth] Shop ${shopId} token refreshed, expires in ${newTokens.expires_in}s`);
       return newTokens.access_token;
