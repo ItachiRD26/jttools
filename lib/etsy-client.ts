@@ -113,6 +113,15 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
     url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/properties`,
   }),
 
+  // Per-variation image mapping — which image_id is bound to which
+  // property_id/value_id combo on a listing (e.g. "Color=Black" → image_id 123).
+  // Etsy endpoint requires OAuth (listings_r) and shop ownership; the consumer
+  // pairs this with /listings/images to resolve image_id → URL.
+  "listings/variation-images": ({ listing_id, shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/variation-images`,
+  }),
+
   "listings/shipping": ({ listing_id }) => ({
     method: "GET",
     url: `${ETSY_BASE}/application/listings/${listing_id}/shipping`,

@@ -14,6 +14,7 @@ import { getValidAccessToken } from "@/lib/etsy-oauth";
 const OAUTH_REQUIRED = new Set([
   "listings/create", "listings/update", "listings/delete",
   "listings/property/update", "listings/property/delete",
+  "listings/variation-images",
   "shops/orders", "shops/transactions", "shops/update",
   "store/receipt", "store/receipt/update",
   "store/section/create", "store/section/update", "store/section/delete",
