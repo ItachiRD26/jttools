@@ -38,10 +38,17 @@ export async function GET(
 
   const job = snap.data()!;
 
-  // Verify ownership via apiKey
-  if (job.apiKey !== apiKey) {
+  // Verify ownership via resolved userId (NOT raw apiKey) so the caller
+  // doesn't lose access to their own jobs after rotating their key.
+  // Jobs without a userId field (legacy rows from before this change)
+  // fall back to the old apiKey comparison.
+  const jobOwnerUserId = job.userId as string | undefined;
+  const ownershipOk = jobOwnerUserId
+    ? jobOwnerUserId === auth.userId
+    : job.apiKey === apiKey;
+  if (!ownershipOk) {
     return NextResponse.json(
-      { error: { code: "INVALID_API_KEY", status: 401, message: "This job does not belong to your API key." } },
+      { error: { code: "INVALID_API_KEY", status: 401, message: "This job does not belong to your account." } },
       { status: 401 }
     );
   }

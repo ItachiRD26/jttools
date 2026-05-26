@@ -2,26 +2,49 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Órdenes — solo el dueño
-    match /orders/{orderId} {
-      allow read, write: if request.auth != null
-        && request.auth.uid == resource.data.userId;
+    // ─────────────────────────────────────────────────────────────────────
+    // users/{uid}
+    //   Read:    owner reads their own user doc (email, name, planId,
+    //            apiKey display, subscription state, etc.)
+    //   Update:  owner can write ONLY `email` and `name` from the client
+    //            (set during Google sign-in at app/auth/page.tsx). All
+    //            other fields (planId, apiKey, keyGeneratedAt,
+    //            subscriptionId, etc.) are server-managed via Admin SDK.
+    //   Create:  blocked — account creation happens server-side.
+    //   Delete:  blocked — account deletion goes through a server flow.
+    // ─────────────────────────────────────────────────────────────────────
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+
+      allow update: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data)
+             .affectedKeys()
+             .hasOnly(['email', 'name']);
+
+      allow create, delete: if false;
     }
 
-    // Datos del usuario y subcolecciones
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null
-        && request.auth.uid == userId;
-    }
-
-    // Sync logs — solo el dueño
-    match /sync_logs/{logId} {
-      allow read, write: if request.auth != null
-        && request.auth.uid == resource.data.userId;
-    }
-
-    // OAuth states — solo escritura del server (Admin SDK bypasses rules)
-    match /oauth_states/{stateId} {
+    // ─────────────────────────────────────────────────────────────────────
+    // Everything else — deny all client access. The Admin SDK (used by all
+    // server-side routes) bypasses these rules entirely, so this does NOT
+    // affect /api/* endpoints. It exists so that if anyone ever imports
+    // the client SDK and tries to read sensitive data directly (OAuth
+    // tokens in etsyConnections, raw API keys in apiKeys, etc.), Firestore
+    // returns PERMISSION_DENIED instead of leaking it.
+    //
+    // Collections covered by this catch-all (verified inventory):
+    //   - apiKeys/{apiKey}                       (doc ID IS the secret key)
+    //   - etsyConnections/{uid}                  (parent — never written)
+    //   - etsyConnections/{uid}/shops/{shopId}   (OAuth access + refresh tokens)
+    //   - oauthPending/{state}                   (short-lived OAuth state)
+    //   - listingJobs/{jobId}                    (job result + caller's apiKey)
+    //   - uploads/{uploadId}                     (may contain base64 image data)
+    //   - uploadChunks/{uploadId}_{i}            (legacy chunked upload data)
+    //   - pushoverConfig/{uid}                   (Pushover user token)
+    //   - usage/{apiKey}/daily/{YYYY-MM-DD}      (rate-limit counters)
+    // ─────────────────────────────────────────────────────────────────────
+    match /{document=**} {
       allow read, write: if false;
     }
   }
