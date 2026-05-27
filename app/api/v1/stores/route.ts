@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
-import { getAllStoreConnections } from "@/lib/etsy-oauth";
+import { getAllStoreConnections, refreshStaleShops } from "@/lib/etsy-oauth";
 
 export async function GET(req: NextRequest) {
   const apiKey = req.headers.get("x-api-key");
@@ -20,6 +20,12 @@ export async function GET(req: NextRequest) {
   }
 
   const uid = auth.userId;
+
+  // Self-heal any shop whose access token is stale. Noop when everything's
+  // already fresh from the cron. Caps response to ~1-2 extra seconds in the
+  // pathological case where every shop needs refreshing.
+  await refreshStaleShops(uid);
+
   const connections = await getAllStoreConnections(uid);
   const now = new Date();
 

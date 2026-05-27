@@ -187,6 +187,41 @@ export async function getAllStoreConnections(userId: string): Promise<StoreConne
   return snap.docs.map(d => d.data() as StoreConnection);
 }
 
+// Self-heal helper for /stores endpoints. For each shop whose access token
+// is within STALE_THRESHOLD_MS of expiry (matching the token_valid threshold)
+// AND that isn't already marked connection_expired, force-refresh in parallel
+// batches. Distributed lock in withRefreshLock prevents collisions with the
+// background cron. If everything is fresh, this is a noop.
+//
+// Why this exists: the dashboard's "Token expired" amber state used to appear
+// whenever the access token aged past its 60min life, even though refresh
+// would succeed instantly. Calling this before responding makes /stores
+// always return shops with fresh tokens (or correctly-flagged expired ones),
+// so the UI is accurate without depending on the cron alone.
+export async function refreshStaleShops(userId: string): Promise<void> {
+  const connections = await getAllStoreConnections(userId);
+  const now         = Date.now();
+  const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+  const stale = connections.filter(c => {
+    if (c.connection_expired) return false; // permanent — skip, user must reconnect
+    const expiresAt = c.expiresAt instanceof Date
+      ? c.expiresAt
+      : (c.expiresAt as FirebaseFirestore.Timestamp).toDate();
+    return expiresAt.getTime() - now < STALE_THRESHOLD_MS;
+  });
+
+  if (stale.length === 0) return;
+
+  const BATCH_CONCURRENCY = 8;
+  for (let i = 0; i < stale.length; i += BATCH_CONCURRENCY) {
+    const batch = stale.slice(i, i + BATCH_CONCURRENCY);
+    await Promise.allSettled(
+      batch.map(c => getValidAccessToken(userId, c.shopId, { force: true })),
+    );
+  }
+}
+
 export async function disconnectStore(userId: string, shopId: string) {
   const db = getDb();
   await db

@@ -479,19 +479,19 @@ function DashboardContent() {
           ) : (
             <div className="space-y-2">
               {stores.map(store => (
-                <div key={store.shopId} className={`flex items-center justify-between px-3 py-2.5 border rounded-xl transition-colors ${store.token_valid === false ? "bg-amber-500/5 border-amber-500/20" : "bg-white/3 border-white/6"}`}>
+                <div key={store.shopId} className={`flex items-center justify-between px-3 py-2.5 border rounded-xl transition-colors ${store.connection_expired ? "bg-amber-500/5 border-amber-500/20" : "bg-white/3 border-white/6"}`}>
                   <div className="flex items-center gap-2.5">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${store.token_valid === false ? "bg-amber-400" : "bg-emerald-400"}`} />
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${store.connection_expired ? "bg-amber-400" : "bg-emerald-400"}`} />
                     <div>
                       <p className="text-sm text-white/80 font-medium">{store.shopName}</p>
                       <p className="text-[10px] font-mono text-white/30">shop_id: {store.shopId}</p>
-                      {store.token_valid === false && (
-                        <p className="text-[10px] text-amber-400 mt-0.5">Token expired — reconnect required</p>
+                      {store.connection_expired && (
+                        <p className="text-[10px] text-amber-400 mt-0.5">Refresh failed — reconnect required</p>
                       )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {store.token_valid === false && (
+                    {store.connection_expired && (
                       <button
                         onClick={connectStore}
                         className="text-xs px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-400 rounded-lg transition-colors"

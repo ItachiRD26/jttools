@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuth } from "firebase-admin/auth";
 import { getAdminApp } from "@/lib/firebase-admin";
-import { getAllStoreConnections } from "@/lib/etsy-oauth";
+import { getAllStoreConnections, refreshStaleShops } from "@/lib/etsy-oauth";
 
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("Authorization");
@@ -25,6 +25,11 @@ export async function GET(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid token" }, { status: 401 });
   }
+
+  // Self-heal any shop whose access token is stale before responding. Noop
+  // when everything's already fresh from the cron. Keeps the dashboard
+  // accurate even if the cron has been disabled or is between runs.
+  await refreshStaleShops(uid);
 
   const connections = await getAllStoreConnections(uid);
   const now         = new Date();
