@@ -25,7 +25,8 @@ interface StoreConnection {
   shopName:   string;
   etsyUserId: string;
   connectedAt?: { toDate: () => Date } | Date;
-  token_valid?: boolean;
+  token_valid?:        boolean;
+  connection_expired?: boolean;
 }
 
 interface UserData {

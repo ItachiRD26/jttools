@@ -11,7 +11,7 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
 } from "firebase/auth";
-import { doc, setDoc, getFirestore, serverTimestamp } from "firebase/firestore";
+import { doc, setDoc, getFirestore } from "firebase/firestore";
 import { app } from "@/lib/firebase-client";
 
 const auth = getAuth(app);
@@ -20,7 +20,7 @@ const db   = getFirestore(app);
 function AuthContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [mode, setMode]       = useState<"login" | "signup">("login"); // signup disabled
+  const [mode, setMode]       = useState<"login" | "signup">("login");
   const [email, setEmail]     = useState("");
   const [password, setPassword] = useState("");
   const [name, setName]       = useState("");
@@ -45,9 +45,17 @@ function AuthContent() {
     setLoading(true);
     try {
       if (mode === "signup") {
-        setError("New registrations are currently closed. Contact us to request access.");
-        setLoading(false);
-        return;
+        const { user: newUser } = await createUserWithEmailAndPassword(auth, email, password);
+        const idToken = await newUser.getIdToken();
+        const res = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ name }),
+        });
+        if (!res.ok) {
+          await newUser.delete();
+          throw new Error("registration-failed");
+        }
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
@@ -76,12 +84,19 @@ function AuthContent() {
       const userSnap = await getDoc(firestoreDoc(db, "users", user.uid));
 
       if (!userSnap.exists()) {
-        // New user — not allowed, sign them out
-        const { getAuth: getClientAuth } = await import("firebase/auth");
-        await getClientAuth().signOut();
-        setError("Registrations are currently closed. Contact us to request access.");
-        setLoading(false);
-        return;
+        const idToken = await user.getIdToken();
+        const res = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ name: user.displayName }),
+        });
+        if (!res.ok) {
+          const { getAuth: getClientAuth } = await import("firebase/auth");
+          await getClientAuth().signOut();
+          setError("Registration failed. Please try again.");
+          setLoading(false);
+          return;
+        }
       }
 
       await setDoc(
@@ -134,7 +149,7 @@ function AuthContent() {
         <div className="bg-white/4 border border-white/8 rounded-2xl p-6 backdrop-blur-sm">
           {/* Tabs */}
           <div className="flex bg-white/4 rounded-lg p-1 mb-6">
-            {(["login"] as const).map((m) => (
+            {(["login", "signup"] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => { setMode(m); setError(""); }}
@@ -222,14 +237,15 @@ function AuthContent() {
 }
 
 function friendlyError(msg: string): string {
-  if (msg.includes("user-not-found"))      return "No account found with this email.";
-  if (msg.includes("wrong-password"))      return "Incorrect password.";
-  if (msg.includes("invalid-credential"))  return "Invalid email or password.";
-  if (msg.includes("email-already-in-use"))return "An account with this email already exists.";
-  if (msg.includes("weak-password"))       return "Password must be at least 6 characters.";
-  if (msg.includes("invalid-email"))       return "Please enter a valid email address.";
-  if (msg.includes("popup-closed"))        return "Sign in cancelled.";
-  if (msg.includes("popup-blocked"))       return "Popup blocked. Please allow popups for this site.";
+  if (msg.includes("user-not-found"))       return "No account found with this email.";
+  if (msg.includes("wrong-password"))       return "Incorrect password.";
+  if (msg.includes("invalid-credential"))   return "Invalid email or password.";
+  if (msg.includes("email-already-in-use")) return "An account with this email already exists.";
+  if (msg.includes("weak-password"))        return "Password must be at least 6 characters.";
+  if (msg.includes("invalid-email"))        return "Please enter a valid email address.";
+  if (msg.includes("popup-closed"))         return "Sign in cancelled.";
+  if (msg.includes("popup-blocked"))        return "Popup blocked. Please allow popups for this site.";
+  if (msg.includes("registration-failed"))  return "Registration failed. Please try again.";
   return "Something went wrong. Please try again.";
 }
 
