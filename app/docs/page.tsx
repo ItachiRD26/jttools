@@ -132,6 +132,14 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
     { method: "GET",    path: "/listings/inventory",  description: "Get inventory/variation data for a listing.",
       params: [{ name:"listing_id",type:"string",required:true,description:"Etsy listing ID" }],
       example: `curl "https://jeterdev.tools/api/v1/listings/inventory?listing_id=1234567890" -H "x-api-key: jt_YOUR_KEY"` },
+    { method: "PUT",    path: "/listings/inventory",  description: "Update SKUs on a listing's inventory items. The bridge fetches current inventory, merges the SKU changes by product_id, and PUTs the full shape back to Etsy — consumer only sends the {product_id, sku} pairs they want to change. No-op SKU updates (where the submitted SKU already matches what's on Etsy) are counted in `skipped` rather than `productsUpdated` and never fail. If a submitted product_id isn't on the listing, the 404 response includes both `submitted` and `actual` arrays for a clean consumer-side diff. Pre-listings_w grants surface as STORE_SCOPE_OUTDATED with a reconnect hint instead of an opaque 502.", plan: "Pro+", note: "Requires Etsy shop connection (listings_w scope). Shops connected before listings_w was added must reconnect.",
+      params: [
+        { name:"listing_id", type:"string", required:true,  description:"Etsy listing ID (query param)" },
+        { name:"shop_id",    type:"string", required:true,  description:"Etsy shop ID matching the listing (query param)" },
+        { name:"products",   type:"array",  required:true,  description:"Body field. Array of { product_id: integer, sku: string }. Pull product_ids from GET /listings/inventory." }
+      ],
+      example: `curl -X PUT "https://jeterdev.tools/api/v1/listings/inventory?listing_id=1234567890&shop_id=61004439" -H "x-api-key: jt_YOUR_KEY" -H "Content-Type: application/json" -d '{"products":[{"product_id":987654321,"sku":"MUG-BLU-S"},{"product_id":987654322,"sku":"MUG-BLU-M"}]}'`,
+      response: `{"ok":true,"listing_id":1234567890,"productsUpdated":2}` },
     { method: "GET",    path: "/listings/properties", description: "Get variation properties for a listing.",
       params: [{ name:"listing_id",type:"string",required:true,description:"Etsy listing ID" },{ name:"shop_id",type:"string",required:true,description:"Etsy shop ID" }],
       example: `curl "https://jeterdev.tools/api/v1/listings/properties?listing_id=1234567890&shop_id=61004439" -H "x-api-key: jt_YOUR_KEY"` },
