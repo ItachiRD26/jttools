@@ -1,11 +1,17 @@
 // LOCATION: app/api/v1/listings/inventory/route.ts
-// GET /api/v1/listings/inventory?listing_id=X
-//   Public read — x-api-key only. Pass-through of Etsy's inventory GET.
+// GET /api/v1/listings/inventory?listing_id=X&shop_id=Y
+//   OAuth-required (listings_r). Despite the original "public read" comment,
+//   Etsy's /v3/application/listings/{id}/inventory endpoint requires
+//   listings_r for every non-trivial response — empirically returns
+//   401 "Access token is required for this request (requires scope:
+//   listings_r)" when called with only an API key. So shop_id is required
+//   here too, just like the PUT below, so the bridge can resolve which
+//   shop's OAuth token to use.
+//
 //   A dedicated route file is required because the PUT below needs OAuth +
 //   body-merge logic the generic catch-all proxy can't express. Next.js
 //   prefers specific routes, so this file shadows the [...path] proxy for
-//   /listings/inventory — keeping GET here preserves the existing public-read
-//   contract.
+//   /listings/inventory.
 //
 // PUT /api/v1/listings/inventory?listing_id=X&shop_id=Y
 //   Body: { products: [{ product_id, sku }, ...] }
@@ -62,15 +68,66 @@ export async function GET(req: NextRequest) {
   }
 
   const listingId = req.nextUrl.searchParams.get("listing_id");
+  const shopId    = req.nextUrl.searchParams.get("shop_id");
   if (!listingId) {
     return NextResponse.json(
       { error: { code: "INVALID_REQUEST", status: 400, message: "listing_id is required.", hint: "Pass ?listing_id=X" } },
       { status: 400, headers: corsHeaders() }
     );
   }
+  if (!shopId) {
+    return NextResponse.json(
+      {
+        error: {
+          code:    "MISSING_SHOP_ID",
+          status:  400,
+          message: "shop_id is required (Etsy's inventory endpoint needs the listings_r OAuth scope).",
+          hint:    "Pass ?shop_id=Y matching the listing's shop.",
+          docs:    "https://jeterdev.tools/docs#store-connection",
+        },
+      },
+      { status: 400, headers: corsHeaders() }
+    );
+  }
+
+  // Resolve userId + OAuth token (same pattern as the PUT below).
+  const db      = getDb();
+  const keySnap = await db.collection("apiKeys").doc(apiKey!).get();
+  const userId  = keySnap.data()?.userId as string | undefined;
+  if (!userId) {
+    return NextResponse.json(
+      { error: { code: "INTERNAL_ERROR", status: 401, message: "Could not identify user." } },
+      { status: 401, headers: corsHeaders() }
+    );
+  }
+
+  let accessToken: string;
+  try {
+    accessToken = await getValidAccessToken(userId, shopId);
+  } catch (err) {
+    const isNotConnected = err instanceof StoreNotConnectedError;
+    return NextResponse.json(
+      {
+        error: {
+          code:    isNotConnected ? "STORE_NOT_CONNECTED" : "STORE_TOKEN_EXPIRED",
+          status:  isNotConnected ? 403 : 503,
+          message: isNotConnected
+            ? `Shop ${shopId} is not connected to your account.`
+            : "Store authorization expired. Re-link the shop at jeterdev.tools/dashboard.",
+          hint:    "Reconnecting also grants any newly-added OAuth scopes.",
+          docs:    "https://jeterdev.tools/docs#store-connection",
+        },
+      },
+      { status: isNotConnected ? 403 : 503, headers: corsHeaders() }
+    );
+  }
 
   const res = await fetch(`${ETSY_BASE}/application/listings/${listingId}/inventory`, {
-    headers: { "x-api-key": API_KEY(), "Accept": "application/json" },
+    headers: {
+      "x-api-key":     API_KEY(),
+      "Authorization": `Bearer ${accessToken}`,
+      "Accept":        "application/json",
+    },
   });
   const data = await res.json().catch(() => ({ error: "Non-JSON response from Etsy" }));
   return NextResponse.json(data, {
