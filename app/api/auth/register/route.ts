@@ -7,6 +7,7 @@ import { getAuth } from "firebase-admin/auth";
 import { FieldValue } from "firebase-admin/firestore";
 import { getAdminApp, getDb, Collections } from "@/lib/firebase-admin";
 import { createApiKey } from "@/lib/api-auth";
+import { sendEmail } from "@/lib/mailer";
 
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -47,6 +48,8 @@ export async function POST(req: NextRequest) {
     apiKey,
     createdAt:  FieldValue.serverTimestamp(),
   });
+
+  await sendEmail({ type: "welcome", to: email, name });
 
   return NextResponse.json({ success: true });
 }
