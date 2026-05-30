@@ -52,14 +52,14 @@ function baseLayout(content: string, preheader = "") {
         <!-- Footer -->
         <tr><td style="padding-top:32px;text-align:center;">
           <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#7F77DD;letter-spacing:0.3px;">JeterDev Tools</p>
-          <p style="margin:0 0 12px;font-size:11px;color:rgba(255,255,255,0.25);line-height:1.6;">
+          <p style="margin:0 0 12px;font-size:11px;color:#6b6b80;line-height:1.6;">
             You're receiving this because you have an account on JeterDev Tools.<br/>
             Questions? <a href="mailto:${SUPPORT}" style="color:#7F77DD;text-decoration:underline;">${SUPPORT}</a>
           </p>
-          <p style="margin:0;font-size:11px;color:rgba(255,255,255,0.15);">
-            <a href="${BASE_URL}/terms" style="color:rgba(255,255,255,0.2);text-decoration:none;">Terms</a>
+          <p style="margin:0;font-size:11px;color:#555566;">
+            <a href="${BASE_URL}/terms" style="color:#6b6b80;text-decoration:none;">Terms</a>
             &nbsp;·&nbsp;
-            <a href="${BASE_URL}/privacy" style="color:rgba(255,255,255,0.2);text-decoration:none;">Privacy</a>
+            <a href="${BASE_URL}/privacy" style="color:#6b6b80;text-decoration:none;">Privacy</a>
             &nbsp;·&nbsp;
             <span>© ${new Date().getFullYear()} JeterDev Tools</span>
           </p>
@@ -76,25 +76,25 @@ function baseLayout(content: string, preheader = "") {
 const h1 = (text: string) =>
   `<h1 style="margin:0 0 8px;font-size:22px;font-weight:900;color:#ffffff;">${text}</h1>`;
 
-const p = (text: string, color = "rgba(255,255,255,0.6)", size = "15px") =>
+const p = (text: string, color = "#c4c4d4", size = "15px") =>
   `<p style="margin:0 0 16px;font-size:${size};line-height:1.6;color:${color};">${text}</p>`;
 
 const divider = () =>
-  `<hr style="border:none;border-top:1px solid rgba(127,119,221,0.15);margin:20px 0;" />`;
+  `<hr style="border:none;border-top:1px solid #2e2e44;margin:20px 0;" />`;
 
 const btn = (text: string, url: string) =>
   `<div style="text-align:center;margin:24px 0;">
     <a href="${url}" style="display:inline-block;padding:12px 28px;background:#7F77DD;color:#fff;font-weight:700;font-size:15px;text-decoration:none;border-radius:10px;">${text}</a>
   </div>`;
 
-const infoRow = (label: string, value: string, valueColor = "#7F77DD") =>
+const infoRow = (label: string, value: string, valueColor = "#9F97FF") =>
   `<tr>
-    <td style="padding:8px 0;font-size:13px;color:rgba(255,255,255,0.4);">${label}</td>
+    <td style="padding:8px 0;font-size:13px;color:#a0a0b8;">${label}</td>
     <td style="padding:8px 0;font-size:13px;font-weight:700;color:${valueColor};text-align:right;">${value}</td>
   </tr>`;
 
 const infoTable = (rows: string) =>
-  `<table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0f;border-radius:10px;padding:4px 16px;margin-bottom:20px;">${rows}</table>`;
+  `<table width="100%" cellpadding="0" cellspacing="0" style="background:#1a1a2e;border-radius:10px;padding:4px 16px;margin-bottom:20px;">${rows}</table>`;
 
 // ─── Email types ──────────────────────────────────────────────────────────────
 export type EmailPayload =
@@ -118,7 +118,7 @@ function buildEmail(payload: EmailPayload): { subject: string; html: string; pre
           ${p(`Hi <strong style="color:#fff;">${payload.name}</strong> — your account is ready. Generate your API key from the dashboard and start making requests to the Etsy API.`)}
           ${btn("Go to Dashboard", `${BASE_URL}/dashboard`)}
           ${divider()}
-          ${p(`Questions? Reply to this email — we're happy to help.`, "rgba(255,255,255,0.3)", "13px")}
+          ${p(`Questions? Reply to this email — we're happy to help.`, "#888899", "13px")}
         `, "Your Etsy API bridge is ready.")
       };
 
@@ -134,7 +134,7 @@ function buildEmail(payload: EmailPayload): { subject: string; html: string; pre
             infoRow("Amount charged",   `$${payload.amount.toFixed(2)} USD`) +
             infoRow("Next billing date", new Date(payload.nextBillingDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }))
           )}
-          ${p("Your API key has been updated automatically. No action needed.", "rgba(255,255,255,0.4)", "13px")}
+          ${p("Your API key has been updated automatically. No action needed.", "#a0a0b8", "13px")}
           ${btn("Go to Dashboard", `${BASE_URL}/dashboard`)}
         `, `${payload.planName} plan is now active.`)
       };
@@ -151,10 +151,10 @@ function buildEmail(payload: EmailPayload): { subject: string; html: string; pre
             infoRow("Amount due",    `$${payload.amount.toFixed(2)} USD`) +
             infoRow("Billing date",  new Date(payload.billingDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }))
           )}
-          ${p("To renew, visit your dashboard and click <strong>Renew Plan</strong>. If you don't renew, your account will be downgraded to Free after the billing date.", "rgba(255,255,255,0.5)", "13px")}
+          ${p("To renew, visit your dashboard and click <strong>Renew Plan</strong>. If you don't renew, your account will be downgraded to Free after the billing date.", "#c4c4d4", "13px")}
           ${btn("Renew Now", `${BASE_URL}/pricing`)}
           ${divider()}
-          ${p(`Want to cancel? You can do it anytime from your <a href="${BASE_URL}/dashboard" style="color:#7F77DD;">dashboard</a>.`, "rgba(255,255,255,0.3)", "12px")}
+          ${p(`Want to cancel? You can do it anytime from your <a href="${BASE_URL}/dashboard" style="color:#7F77DD;">dashboard</a>.`, "#888899", "12px")}
         `, `$${payload.amount} due in 2 days.`)
       };
 
@@ -170,7 +170,7 @@ function buildEmail(payload: EmailPayload): { subject: string; html: string; pre
             infoRow("Amount due",  `$${payload.amount.toFixed(2)} USD`, "#f87171") +
             infoRow("Status",      "Past due", "#f87171")
           )}
-          ${p("If you don't renew within <strong style=\"color:#fff;\">2 days</strong>, your account will be automatically downgraded to the Free plan and your current API key will be limited.", "rgba(255,255,255,0.5)", "13px")}
+          ${p("If you don't renew within <strong style=\"color:#fff;\">2 days</strong>, your account will be automatically downgraded to the Free plan and your current API key will be limited.", "#c4c4d4", "13px")}
           ${btn("Renew Now", `${BASE_URL}/pricing`)}
         `, "Renew now to keep your API access.")
       };
@@ -187,7 +187,7 @@ function buildEmail(payload: EmailPayload): { subject: string; html: string; pre
             infoRow("Daily limit",  "100 requests/day") +
             infoRow("Reason",       payload.reason === "non_payment" ? "Payment overdue" : "Cancelled by user")
           )}
-          ${p("Your API key still works but is now limited to the Free plan. Upgrade anytime to restore your previous limits.", "rgba(255,255,255,0.4)", "13px")}
+          ${p("Your API key still works but is now limited to the Free plan. Upgrade anytime to restore your previous limits.", "#a0a0b8", "13px")}
           ${btn("Upgrade Plan", `${BASE_URL}/pricing`)}
         `, "Your account is now on the Free plan.")
       };
@@ -204,10 +204,10 @@ function buildEmail(payload: EmailPayload): { subject: string; html: string; pre
             infoRow("Current plan",  "Free") +
             infoRow("Daily limit",   "100 requests/day")
           )}
-          ${p("Your API key still works on the Free plan. You can upgrade again anytime.", "rgba(255,255,255,0.4)", "13px")}
+          ${p("Your API key still works on the Free plan. You can upgrade again anytime.", "#a0a0b8", "13px")}
           ${btn("View Dashboard", `${BASE_URL}/dashboard`)}
           ${divider()}
-          ${p(`We'd love to know why you cancelled. Reply to this email — your feedback helps us improve.`, "rgba(255,255,255,0.3)", "12px")}
+          ${p(`We'd love to know why you cancelled. Reply to this email — your feedback helps us improve.`, "#888899", "12px")}
         `, "Your plan has been cancelled.")
       };
 
