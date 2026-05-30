@@ -15,6 +15,14 @@ const OAUTH_REQUIRED = new Set([
   "listings/create", "listings/update", "listings/delete",
   "listings/property/update", "listings/property/delete",
   "listings/variation-images",
+  // Etsy's /v3/application/listings/{id}/inventory endpoint requires
+  // listings_r for any non-public response. The catch-all was previously
+  // forwarding without an access token (treating inventory as a public
+  // endpoint), which Etsy 401'd with "Access token is required for this
+  // request (requires scope: listings_r)" — even when the caller passed
+  // a valid shop_id. Connected shops already have listings_r in the
+  // OAuth grant; no re-auth needed.
+  "listings/inventory",
   "shops/orders", "shops/transactions", "shops/update",
   "store/receipt", "store/receipt/update",
   "store/section/create", "store/section/update", "store/section/delete",
