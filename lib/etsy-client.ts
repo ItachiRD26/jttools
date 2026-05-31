@@ -88,12 +88,13 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
   }),
 
   "listings/update": ({ shop_id, listing_id }, body) => ({
-    // Etsy's `updateListing` lives under the shop-scoped path. The bare
-    // `/application/listings/{id}` URL handles GET only — write methods
-    // there return 404 "Resource not found". Method is PUT per Etsy's
-    // OpenAPI spec; in practice Etsy treats it as a partial update,
-    // ignoring fields that aren't included in the body.
-    method: "PUT",
+    // Etsy's `updateListing` requires BOTH:
+    //   - shop-scoped path: /application/shops/{shop_id}/listings/{listing_id}
+    //     (the bare /application/listings/{id} URL is GET-only)
+    //   - PATCH method (PUT on this URL also returns 404 — only PATCH is
+    //     wired up server-side for this resource)
+    // Body is partial — Etsy keeps fields that aren't included as-is.
+    method: "PATCH",
     url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}`,
     body,
   }),
