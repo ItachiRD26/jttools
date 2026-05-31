@@ -87,15 +87,22 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
     body,
   }),
 
-  "listings/update": ({ listing_id }, body) => ({
-    method: "PATCH",
-    url: `${ETSY_BASE}/application/listings/${listing_id}`,
+  "listings/update": ({ shop_id, listing_id }, body) => ({
+    // Etsy's `updateListing` lives under the shop-scoped path. The bare
+    // `/application/listings/{id}` URL handles GET only — write methods
+    // there return 404 "Resource not found". Method is PUT per Etsy's
+    // OpenAPI spec; in practice Etsy treats it as a partial update,
+    // ignoring fields that aren't included in the body.
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}`,
     body,
   }),
 
-  "listings/delete": ({ listing_id }) => ({
+  "listings/delete": ({ shop_id, listing_id }) => ({
+    // Same shop-scoped path requirement as updateListing — bare
+    // `/application/listings/{id}` is GET-only.
     method: "DELETE",
-    url: `${ETSY_BASE}/application/listings/${listing_id}`,
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}`,
   }),
 
   "listings/images": ({ listing_id }) => ({
