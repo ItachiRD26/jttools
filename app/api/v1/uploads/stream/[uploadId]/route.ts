@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { put } from "@vercel/blob";
 import { getDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
+import { validateRequest } from "@/lib/api-auth";
 
 export const runtime    = "nodejs";
 export const maxDuration = 60;
@@ -30,6 +31,27 @@ export async function PUT(
   const { uploadId } = await params;
   const db           = getDb();
 
+  // ── Auth + ownership check ───────────────────────────────────────────────
+  // Validate the caller's API key, then verify the upload belongs to them.
+  // Without this, knowing the 128-bit uploadId alone is enough to overwrite
+  // someone else's pending upload — fine against random attackers (the id
+  // is cryptographically random) but vulnerable to scenarios where the id
+  // leaks via shared logs, devtools, or screen-share between collaborators.
+  // Mirrors the ownership check already enforced by /uploads/confirm.
+  const apiKey = req.headers.get("x-api-key");
+  const auth   = await validateRequest(apiKey, "uploads");
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status, headers: cors() });
+  }
+  const keySnap     = await db.collection("apiKeys").doc(apiKey!).get();
+  const callerUserId = keySnap.data()?.userId as string | undefined;
+  if (!callerUserId) {
+    return NextResponse.json(
+      { error: { code: "INTERNAL_ERROR", status: 401, message: "Could not identify user." } },
+      { status: 401, headers: cors() }
+    );
+  }
+
   // Verify upload exists and is pending
   const snap = await db.collection("uploads").doc(uploadId).get();
   if (!snap.exists) {
@@ -40,6 +62,13 @@ export async function PUT(
   }
 
   const data = snap.data()!;
+
+  if (data.userId !== callerUserId) {
+    return NextResponse.json(
+      { error: { code: "FORBIDDEN", status: 403, message: "This upload does not belong to your API key." } },
+      { status: 403, headers: cors() }
+    );
+  }
 
   if (data.status !== "pending") {
     return NextResponse.json(
