@@ -147,6 +147,14 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
       params: [{ name:"listing_id",type:"string",required:true,description:"Etsy listing ID" },{ name:"shop_id",type:"string",required:true,description:"Etsy shop ID" }],
       example: `curl "https://jeterdev.tools/api/v1/listings/variation-images?listing_id=1234567890&shop_id=61004439" -H "x-api-key: jt_YOUR_KEY"`,
       response: `{"results":[{"property_id":200,"value_id":1,"image_id":5523110099001,"shop_id":61004439,"listing_id":1234567890},{"property_id":200,"value_id":2,"image_id":5523110099002,"shop_id":61004439,"listing_id":1234567890}]}` },
+    { method: "POST",   path: "/listings/variation-images/set", description: "Set the per-variation image mapping on an already-published listing. Two primary use cases: (1) retry the variation-images step after a publish completed with a VARIATION_IMAGES_FAILED warning — the listing exists with offerings but no images attached to them, so you re-send the mapping standalone without re-uploading images or recreating the listing; (2) change which image is bound to which variation value after publish (e.g. swap the 'Blue Jewel → image rank 3' mapping to 'Blue Jewel → image rank 5'). The consumer is responsible for resolving value names and image indices to Etsy IDs: pair this endpoint with GET /listings/inventory (for property_id + value_id, since variation properties live on products[].property_values[], NOT on /listings/properties which returns category attributes only) and GET /listings/images (for listing_image_id by upload rank).", plan: "Pro+", note: "Requires Etsy shop connection (listings_w scope).",
+      params: [
+        { name:"listing_id",      type:"string", required:true, description:"Etsy listing ID (query param)" },
+        { name:"shop_id",         type:"string", required:true, description:"Etsy shop ID matching the listing (query param)" },
+        { name:"variation_images",type:"array",  required:true, description:"Body field. Array of { property_id: integer, value_id: integer, image_id: integer }. All three IDs are Etsy-assigned — see description for which GET endpoints to resolve from." }
+      ],
+      example: `curl -X POST "https://jeterdev.tools/api/v1/listings/variation-images/set?listing_id=1234567890&shop_id=61004439" -H "x-api-key: jt_YOUR_KEY" -H "Content-Type: application/json" -d '{"variation_images":[{"property_id":513,"value_id":42,"image_id":5523110099001},{"property_id":513,"value_id":43,"image_id":5523110099002}]}'`,
+      response: `{"results":[{"property_id":513,"value_id":42,"image_id":5523110099001,"shop_id":61004439,"listing_id":1234567890},{"property_id":513,"value_id":43,"image_id":5523110099002,"shop_id":61004439,"listing_id":1234567890}]}` },
     { method: "GET",    path: "/listings/shipping",   description: "Get shipping info for a listing.",
       params: [{ name:"listing_id",type:"string",required:true,description:"Etsy listing ID" }],
       example: `curl "https://jeterdev.tools/api/v1/listings/shipping?listing_id=1234567890" -H "x-api-key: jt_YOUR_KEY"` },
@@ -587,7 +595,7 @@ function StoreConnection() {
         </div>
         <div className="bg-[#7F77DD]/5 border border-[#7F77DD]/20 rounded-xl p-4">
           <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest mb-3">⚡ Requires store connection</p>
-          {["listings/create","listings/update","listings/delete","listings/property/*","shops/orders","shops/transactions","shops/update","store/receipt/update","store/section/*","images/upload","images/delete","media/file/*","media/video/upload","users/me","users/addresses","policies/*","shipping/create","shipping/update","shipping/delete"].map(ep => (
+          {["listings/create","listings/update","listings/delete","listings/inventory","listings/variation-images","listings/variation-images/set","listings/property/*","shops/orders","shops/transactions","shops/update","store/receipt/update","store/section/*","images/upload","images/delete","media/file/*","media/video/upload","users/me","users/addresses","policies/*","shipping/create","shipping/update","shipping/delete"].map(ep => (
             <div key={ep} className="text-xs font-mono text-white/35 py-0.5">{ep}</div>
           ))}
         </div>
