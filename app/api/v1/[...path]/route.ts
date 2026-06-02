@@ -15,6 +15,7 @@ const OAUTH_REQUIRED = new Set([
   "listings/create", "listings/update", "listings/delete",
   "listings/property/update", "listings/property/delete",
   "listings/variation-images",
+  "listings/variation-images/set",
   // Etsy's /v3/application/listings/{id}/inventory endpoint requires
   // listings_r for any non-public response. The catch-all was previously
   // forwarding without an access token (treating inventory as a public

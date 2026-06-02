@@ -130,6 +130,23 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
     url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/variation-images`,
   }),
 
+  // Set the per-variation image mapping on an already-published listing.
+  // Body shape per Etsy v3: { variation_images: [{ property_id, value_id,
+  // image_id }, ...] }. Required scopes: listings_w. The consumer is
+  // responsible for resolving (property + value-string) → value_id and
+  // (image index) → image_id (via GET /listings/{id}/images) before calling.
+  //
+  // This is the retry-after-publish path: the initial publish payload
+  // includes variation_images by INDEX (which JT resolves to image_ids
+  // internally), but if JT's variation-images POST step fails after the
+  // listing is created (VARIATION_IMAGES_FAILED warning), this endpoint
+  // lets the consumer retry it in isolation without re-uploading images.
+  "listings/variation-images/set": ({ shop_id, listing_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/variation-images`,
+    body,
+  }),
+
   "listings/shipping": ({ listing_id }) => ({
     method: "GET",
     url: `${ETSY_BASE}/application/listings/${listing_id}/shipping`,
