@@ -3,13 +3,13 @@
 //
 // Pagos manuales vía AirTM (no hay cobro recurrente automático). Este cron:
 //   1. Manda recordatorio 2 días antes de que venza nextBillingDate
-//   2. Downgrade a free en cuanto nextBillingDate ya pasó — el usuario debe
-//      pagar y subir un nuevo comprobante para renovar
-//   3. (Legado) Downgrade de usuarios PayPal que quedaron en past_due antes
-//      de retirar esa integración
+//   2. Al vencer: marca past_due (no corta acceso aún) y manda aviso de pago
+//      vencido — da 2 días de gracia para pagar y subir el comprobante
+//   3. Downgrade a free si lleva >2 días en past_due sin renovar
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, Collections } from "@/lib/firebase-admin";
+import { FieldValue } from "firebase-admin/firestore";
 import { downgradePlan } from "@/lib/billing";
 import { sendEmail } from "@/lib/mailer";
 import { getPlan } from "@/lib/plans";
@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
   const now = new Date();
   const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
 
-  const results = { reminded: 0, downgraded: 0, errors: 0 };
+  const results = { reminded: 0, markedPastDue: 0, downgraded: 0, errors: 0 };
 
   // Solo usuarios pro activos o past_due
   const usersSnap = await db.collection(Collections.USERS)
@@ -56,14 +56,27 @@ export async function GET(req: NextRequest) {
           results.reminded++;
         }
 
-        // Sin cobro automático (AirTM es manual) — downgrade en cuanto vence
+        // Sin cobro automático (AirTM es manual) — al vencer no cortamos
+        // acceso de inmediato, damos 2 días de gracia para pagar y subir
+        // el comprobante antes de bajar a free
         if (nextBilling <= now) {
-          await downgradePlan(uid, "non_payment");
-          results.downgraded++;
+          const plan = getPlan(user.planId);
+          await db.collection(Collections.USERS).doc(uid).update({
+            planStatus: "past_due",
+            pastDueSince: FieldValue.serverTimestamp(),
+          });
+          await sendEmail({
+            type: "renewal_past_due",
+            to: user.email,
+            name: user.name ?? user.email,
+            planName: plan.name,
+            amount: plan.price,
+          });
+          results.markedPastDue++;
         }
       }
 
-      // ── Legado: usuarios PayPal que quedaron en past_due ───────────────────
+      // ── Downgrade si lleva >2 días en past_due sin renovar ─────────────────
       if (user.planStatus === "past_due") {
         const pastDueSince: Date | null = user.pastDueSince?.toDate?.() ?? null;
         if (pastDueSince && pastDueSince <= twoDaysAgo) {
