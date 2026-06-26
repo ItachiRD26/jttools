@@ -16,7 +16,7 @@ const STEPS = [
   {
     number: "02",
     title: "Pick a plan",
-    description: "Starting at $0/mo. Pay with PayPal. Your plan controls daily request limits and endpoint access.",
+    description: "Starting at $0/mo. Pay via AirTM. Your plan controls daily request limits and endpoint access.",
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z" />
@@ -190,7 +190,7 @@ export default function LandingPage() {
           <div className="text-center mb-14">
             <p className="text-xs font-mono text-[#7F77DD] tracking-widest uppercase mb-3">Pricing</p>
             <h2 className="text-3xl font-semibold tracking-tight mb-3">Simple and transparent</h2>
-            <p className="text-white/40 text-sm">Pay with PayPal. Daily reset at midnight UTC. No overage charges.</p>
+            <p className="text-white/40 text-sm">Pay via AirTM. Daily reset at midnight UTC. No overage charges.</p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {PLANS.map((plan) => (

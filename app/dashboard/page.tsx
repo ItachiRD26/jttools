@@ -60,7 +60,6 @@ function DashboardContent() {
   const [loadingStores, setLoadingStores] = useState(false);
   const [connectingStore, setConnectingStore] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [capturingPayment, setCapturingPayment] = useState(false);
   const [paymentMsg, setPaymentMsg]   = useState("");
 
   const fetchUsage = useCallback(async (key: string) => {
@@ -69,35 +68,6 @@ function DashboardContent() {
       if (res.ok) setUsage(await res.json());
     } catch {}
   }, []);
-
-  const capturePaypalPayment = useCallback(async (orderId: string, currentUser: User) => {
-    setCapturingPayment(true);
-    setPaymentMsg("Confirming your PayPal payment...");
-    try {
-      const token = await currentUser.getIdToken();
-      const res = await fetch("/api/paypal/capture-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ orderId }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setPaymentMsg("✓ Payment confirmed. Your plan is now active.");
-        setApiKey(data.apiKey);
-        setKeyVisible(true);
-        const snap = await getDoc(doc(db, "users", currentUser.uid));
-        if (snap.exists()) setUserData(snap.data() as UserData);
-        if (data.apiKey) await fetchUsage(data.apiKey);
-      } else {
-        setPaymentMsg("Payment could not be confirmed. Please contact support.");
-      }
-    } catch {
-      setPaymentMsg("Network error. Please try refreshing the page.");
-    } finally {
-      setCapturingPayment(false);
-      router.replace("/dashboard");
-    }
-  }, [fetchUsage, router]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -115,12 +85,7 @@ function DashboardContent() {
       }
       setLoading(false);
 
-      // PayPal returns ?token=ORDER_ID&PayerID=... on approval
-      const paypalOrderId = searchParams.get("token");
       const cancelled = searchParams.get("cancelled");
-      if (paypalOrderId) {
-        await capturePaypalPayment(paypalOrderId, u);
-      }
       const etsyStatus  = searchParams.get("etsy");
       const etsyShop    = searchParams.get("shop");
       if (etsyStatus === "connected") {
@@ -143,7 +108,7 @@ function DashboardContent() {
 
     });
     return () => unsub();
-  }, [router, searchParams, fetchUsage, capturePaypalPayment]);
+  }, [router, searchParams, fetchUsage]);
 
 
 
@@ -321,15 +286,12 @@ function DashboardContent() {
         </div>
 
         {/* Payment status */}
-        {(paymentMsg || capturingPayment) && (
+        {paymentMsg && (
           <div className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-sm ${
-            capturingPayment
-              ? "bg-[#7F77DD]/10 border-[#7F77DD]/20 text-[#7F77DD]"
-              : paymentMsg.startsWith("✓")
+            paymentMsg.startsWith("✓")
               ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
               : "bg-red-500/10 border-red-500/20 text-red-400"
           }`}>
-            {capturingPayment && <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />}
             {paymentMsg}
           </div>
         )}

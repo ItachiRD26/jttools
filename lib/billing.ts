@@ -15,11 +15,18 @@ export interface UserBillingDoc {
   nextBillingDate?: FirebaseFirestore.Timestamp;
   planActivatedAt?: FirebaseFirestore.Timestamp;
   apiKey?: string;
-  paypalSubscriptionId?: string; // antes era paypalOrderId (pago único)
+  paypalSubscriptionId?: string; // legado — usuarios activados antes de quitar PayPal
+  paymentMethod?: "paypal" | "airtm";
+  paymentReference?: string; // gs:// path al comprobante (airtm) o subscriptionId (paypal)
 }
 
-// ─── Activate plan after PayPal subscription approval ────────────────────────
-export async function activatePlan(uid: string, planId: string, subscriptionId: string) {
+// ─── Activate plan after payment approval (PayPal legacy or AirTM proof) ─────
+export async function activatePlan(
+  uid: string,
+  planId: string,
+  paymentReference: string,
+  paymentMethod: "paypal" | "airtm" = "airtm",
+) {
   const db = getDb();
   const plan = getPlan(planId);
 
@@ -39,7 +46,8 @@ export async function activatePlan(uid: string, planId: string, subscriptionId: 
     planId,
     planStatus: "active",
     apiKey: newApiKey,
-    paypalSubscriptionId: subscriptionId, // guardamos el subscriptionId (no el orderId)
+    paymentMethod,
+    paymentReference,
     planActivatedAt: FieldValue.serverTimestamp(),
     nextBillingDate,
     // limpiar campos de estado anterior
@@ -81,6 +89,7 @@ export async function cancelPlan(uid: string) {
     apiKey: freeKey,
     nextBillingDate: FieldValue.delete(),
     paypalSubscriptionId: FieldValue.delete(),
+    paymentReference: FieldValue.delete(),
     cancelledAt: FieldValue.serverTimestamp(),
   });
 
@@ -109,6 +118,7 @@ export async function downgradePlan(uid: string, reason: "non_payment" | "cancel
     apiKey: freeKey,
     nextBillingDate: FieldValue.delete(),
     paypalSubscriptionId: FieldValue.delete(),
+    paymentReference: FieldValue.delete(),
   });
 
   await sendEmail({

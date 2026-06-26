@@ -44,13 +44,18 @@ const PLANS = [
   },
 ];
 
+const AIRTM_LINK = process.env.NEXT_PUBLIC_AIRTM_LINK || "https://airtm.me/peter5uoojfnx";
+
 function PricingContent() {
   const router       = useRouter();
   const searchParams = useSearchParams();
   const [user, setUser]               = useState<User | null>(null);
   const [checking, setChecking]       = useState(true);
-  const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [error, setError]             = useState("");
+  const [paymentPlan, setPaymentPlan] = useState<typeof PLANS[0] | null>(null);
+  const [proofFile, setProofFile]     = useState<File | null>(null);
+  const [uploading, setUploading]     = useState(false);
+  const [success, setSuccess]         = useState(false);
 
   const pendingPlan = searchParams.get("plan");
 
@@ -62,7 +67,7 @@ function PricingContent() {
       if (u && pendingPlan) {
         const plan = PLANS.find((p) => p.id === pendingPlan);
         if (plan && plan.price > 0) {
-          triggerSubscription(u, plan);
+          setPaymentPlan(plan);
         } else if (plan?.price === 0) {
           router.replace("/dashboard");
         }
@@ -71,34 +76,35 @@ function PricingContent() {
     return () => unsub();
   }, [router, pendingPlan]);
 
-  async function triggerSubscription(currentUser: User, plan: typeof PLANS[0]) {
-    setLoadingPlan(plan.id);
+  async function submitProof() {
+    if (!user || !paymentPlan || !proofFile) return;
+    setUploading(true);
     setError("");
     try {
-      const token = await currentUser.getIdToken();
-      const res = await fetch("/api/paypal/create-subcription", {
+      const token = await user.getIdToken();
+      const body = new FormData();
+      body.append("proof", proofFile);
+      body.append("planId", paymentPlan.id);
+
+      const res = await fetch("/api/billing/airtm-payment", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ planId: plan.id }),
+        headers: { Authorization: `Bearer ${token}` },
+        body,
       });
-      if (!res.ok) throw new Error("Failed to create PayPal subscription");
-      const { subscriptionId, approvalUrl } = await res.json();
-
-      // Guardar subscriptionId en sessionStorage para usarlo al volver
-      if (subscriptionId) {
-        sessionStorage.setItem("pending_subscription_id", subscriptionId);
-        sessionStorage.setItem("pending_plan_id", plan.id);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to verify payment");
       }
-
-      if (approvalUrl) window.location.href = approvalUrl;
+      setSuccess(true);
+      setTimeout(() => router.push("/dashboard"), 1500);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
-      setLoadingPlan(null);
+      setUploading(false);
     }
   }
 
-  async function handleSelect(plan: typeof PLANS[0]) {
+  function handleSelect(plan: typeof PLANS[0]) {
     setError("");
 
     if (!user) {
@@ -111,7 +117,7 @@ function PricingContent() {
       return;
     }
 
-    await triggerSubscription(user, plan);
+    setPaymentPlan(plan);
   }
 
   if (checking) {
@@ -156,7 +162,7 @@ function PricingContent() {
           <p className="text-xs font-mono text-[#7F77DD] tracking-widest uppercase mb-4">Pricing</p>
           <h1 className="text-4xl font-semibold tracking-tight mb-4">Simple, transparent pricing</h1>
           <p className="text-white/40 text-base max-w-md mx-auto">
-            Pay with PayPal. All plans reset daily at midnight UTC. No overage charges.
+            Pay via AirTM. All plans reset daily at midnight UTC. No overage charges.
           </p>
         </div>
 
@@ -211,14 +217,11 @@ function PricingContent() {
 
               <button
                 onClick={() => handleSelect(plan)}
-                disabled={loadingPlan === plan.id}
                 className={`w-full py-2.5 rounded-xl text-sm font-medium transition-all disabled:opacity-50 flex items-center justify-center gap-2 ${"badge" in plan && plan.badge ? "bg-[#7F77DD] hover:bg-[#6B62CC] text-white" : "bg-white/6 hover:bg-white/10 text-white/80 hover:text-white"}`}
               >
-                {loadingPlan === plan.id
-                  ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  : plan.price === 0
+                {plan.price === 0
                   ? "Get started free"
-                  : user ? "Subscribe with PayPal" : "Select plan"}
+                  : user ? "Pay with AirTM" : "Select plan"}
               </button>
             </div>
           ))}
@@ -241,6 +244,73 @@ function PricingContent() {
           ))}
         </div>
       </div>
+
+      {/* AirTM payment modal */}
+      {paymentPlan && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-[#111118] border border-white/10 rounded-2xl p-6">
+            {success ? (
+              <div className="text-center py-6">
+                <div className="w-10 h-10 mx-auto mb-3 rounded-full bg-green-500/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <p className="text-white font-medium">Payment received — Pro plan activated!</p>
+                <p className="text-white/40 text-sm mt-1">Redirecting to your dashboard...</p>
+              </div>
+            ) : (
+              <>
+                <h2 className="text-lg font-semibold text-white mb-1">Pay with AirTM</h2>
+                <p className="text-sm text-white/40 mb-4">
+                  Send <strong className="text-white">${paymentPlan.price}.00 USD</strong> via the AirTM link below, then upload a screenshot of the payment confirmation.
+                </p>
+
+                <a
+                  href={AIRTM_LINK}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full text-center py-2.5 mb-4 rounded-xl text-sm font-medium bg-[#7F77DD] hover:bg-[#6B62CC] text-white transition-colors"
+                >
+                  Open AirTM payment link ↗
+                </a>
+
+                <label className="block text-xs text-white/40 mb-1.5 font-mono">Payment proof (screenshot)</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setProofFile(e.target.files?.[0] ?? null)}
+                  className="w-full text-sm text-white/70 bg-white/4 border border-white/8 rounded-xl px-3.5 py-2.5 mb-4 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:bg-[#7F77DD] file:text-white file:text-xs"
+                />
+
+                {error && (
+                  <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-4">
+                    {error}
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => { setPaymentPlan(null); setProofFile(null); setError(""); }}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-white/6 hover:bg-white/10 text-white/70"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={submitProof}
+                    disabled={!proofFile || uploading}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-[#7F77DD] hover:bg-[#6B62CC] text-white disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {uploading
+                      ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      : "I've paid — submit"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

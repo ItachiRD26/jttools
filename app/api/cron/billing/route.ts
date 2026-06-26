@@ -1,11 +1,12 @@
 // LOCATION: app/api/cron/billing/route.ts
 // Runs daily at 00:05 UTC via Vercel Cron
 //
-// Con suscripciones de PayPal, el cobro recurrente lo maneja PayPal
-// automáticamente. Este cron solo actúa como red de seguridad para:
-//   1. Recordatorio 2 días antes de la renovación
-//   2. Downgrade si llevan más de 2 días en past_due
-//      (past_due lo setea el webhook BILLING.SUBSCRIPTION.SUSPENDED)
+// Pagos manuales vía AirTM (no hay cobro recurrente automático). Este cron:
+//   1. Manda recordatorio 2 días antes de que venza nextBillingDate
+//   2. Downgrade a free en cuanto nextBillingDate ya pasó — el usuario debe
+//      pagar y subir un nuevo comprobante para renovar
+//   3. (Legado) Downgrade de usuarios PayPal que quedaron en past_due antes
+//      de retirar esa integración
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, Collections } from "@/lib/firebase-admin";
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
     const uid = doc.id;
 
     try {
-      // ── Recordatorio 2 días antes ──────────────────────────────────────────
+      // ── Recordatorio 2 días antes de que venza ─────────────────────────────
       if (user.planStatus === "active" && user.nextBillingDate) {
         const nextBilling: Date = user.nextBillingDate.toDate();
         const daysUntil = Math.ceil(
@@ -54,10 +55,15 @@ export async function GET(req: NextRequest) {
           });
           results.reminded++;
         }
+
+        // Sin cobro automático (AirTM es manual) — downgrade en cuanto vence
+        if (nextBilling <= now) {
+          await downgradePlan(uid, "non_payment");
+          results.downgraded++;
+        }
       }
 
-      // ── Downgrade si lleva >2 días en past_due ─────────────────────────────
-      // (PayPal ya suspendió la suscripción y lo notificó via webhook)
+      // ── Legado: usuarios PayPal que quedaron en past_due ───────────────────
       if (user.planStatus === "past_due") {
         const pastDueSince: Date | null = user.pastDueSince?.toDate?.() ?? null;
         if (pastDueSince && pastDueSince <= twoDaysAgo) {
