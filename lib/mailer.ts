@@ -98,12 +98,13 @@ const infoTable = (rows: string) =>
 
 // ─── Email types ──────────────────────────────────────────────────────────────
 export type EmailPayload =
-  | { type: "plan_activated";     to: string; name: string; planName: string; amount: number; nextBillingDate: string }
-  | { type: "renewal_reminder";   to: string; name: string; planName: string; amount: number; billingDate: string }
-  | { type: "renewal_past_due";   to: string; name: string; planName: string; amount: number }
-  | { type: "plan_downgraded";    to: string; name: string; reason: "non_payment" | "cancelled" }
-  | { type: "plan_cancelled";     to: string; name: string; planName: string }
-  | { type: "welcome";            to: string; name: string }
+  | { type: "plan_activated";          to: string; name: string; planName: string; amount: number; nextBillingDate: string }
+  | { type: "renewal_reminder";        to: string; name: string; planName: string; amount: number; billingDate: string }
+  | { type: "renewal_past_due";        to: string; name: string; planName: string; amount: number }
+  | { type: "manual_billing_reminder"; to: string; name: string; planName: string; amount: number; billingDate: string }
+  | { type: "plan_downgraded";         to: string; name: string; reason: "non_payment" | "cancelled" }
+  | { type: "plan_cancelled";          to: string; name: string; planName: string }
+  | { type: "welcome";                 to: string; name: string }
 
 // ─── Build email ──────────────────────────────────────────────────────────────
 function buildEmail(payload: EmailPayload): { subject: string; html: string; preheader: string } {
@@ -156,6 +157,26 @@ function buildEmail(payload: EmailPayload): { subject: string; html: string; pre
           ${divider()}
           ${p(`Want to cancel? You can do it anytime from your <a href="${BASE_URL}/dashboard" style="color:#7F77DD;">dashboard</a>.`, "#888899", "12px")}
         `, `$${payload.amount} due in 2 days.`)
+      };
+
+    case "manual_billing_reminder":
+      return {
+        subject: `📅 Monthly payment due — ${payload.planName} plan`,
+        preheader: `Your monthly payment of $${payload.amount} is due.`,
+        html: baseLayout(`
+          ${h1("Monthly Payment Reminder 📅")}
+          ${p(`Hi <strong style="color:#fff;">${payload.name}</strong> — this is your monthly reminder that your <strong style="color:#7F77DD;">${payload.planName}</strong> plan payment is due.`)}
+          ${infoTable(
+            infoRow("Plan",        payload.planName) +
+            infoRow("Amount",      `$${payload.amount.toFixed(2)} USD`) +
+            infoRow("Due date",    new Date(payload.billingDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })) +
+            infoRow("Next reminder", new Date(new Date(payload.billingDate).getTime() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }))
+          )}
+          ${p("Your Pro plan access remains active. Please contact us to coordinate your payment.", "#c4c4d4", "13px")}
+          ${btn("Go to Dashboard", `${BASE_URL}/dashboard`)}
+          ${divider()}
+          ${p(`Questions? Reply to this email or contact <a href="mailto:${SUPPORT}" style="color:#7F77DD;">${SUPPORT}</a>.`, "#888899", "12px")}
+        `, `Monthly payment of $${payload.amount} due.`)
       };
 
     case "renewal_past_due":

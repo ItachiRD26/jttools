@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
   const now = new Date();
   const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
 
-  const results = { reminded: 0, markedPastDue: 0, downgraded: 0, errors: 0 };
+  const results = { reminded: 0, markedPastDue: 0, downgraded: 0, remindedManual: 0, errors: 0 };
 
   // Solo usuarios pro activos o past_due
   const usersSnap = await db.collection(Collections.USERS)
@@ -36,6 +36,45 @@ export async function GET(req: NextRequest) {
     const uid = doc.id;
 
     try {
+      // ── Usuarios con facturación manual (nunca se degradan) ────────────────
+      if (user.manualBilling) {
+        if (user.nextBillingDate) {
+          const nextBilling: Date = user.nextBillingDate.toDate();
+          const daysUntil = Math.ceil(
+            (nextBilling.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+          );
+          const plan = getPlan(user.planId);
+
+          if (daysUntil === 2) {
+            await sendEmail({
+              type: "manual_billing_reminder",
+              to: user.email,
+              name: user.name ?? user.email,
+              planName: plan.name,
+              amount: plan.price,
+              billingDate: nextBilling.toISOString(),
+            });
+            results.remindedManual++;
+          }
+
+          // Al vencer: avanzar fecha 30 días y mandar recordatorio (sin cortar acceso)
+          if (nextBilling <= now) {
+            const newBillingDate = new Date(nextBilling.getTime() + 30 * 24 * 60 * 60 * 1000);
+            await db.collection(Collections.USERS).doc(uid).update({ nextBillingDate: newBillingDate });
+            await sendEmail({
+              type: "manual_billing_reminder",
+              to: user.email,
+              name: user.name ?? user.email,
+              planName: plan.name,
+              amount: plan.price,
+              billingDate: newBillingDate.toISOString(),
+            });
+            results.remindedManual++;
+          }
+        }
+        continue; // nunca past_due, nunca downgrade
+      }
+
       // ── Recordatorio 2 días antes de que venza ─────────────────────────────
       if (user.planStatus === "active" && user.nextBillingDate) {
         const nextBilling: Date = user.nextBillingDate.toDate();

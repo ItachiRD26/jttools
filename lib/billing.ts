@@ -18,6 +18,7 @@ export interface UserBillingDoc {
   paypalSubscriptionId?: string; // legado — usuarios activados antes de quitar PayPal
   paymentMethod?: "paypal" | "airtm";
   paymentReference?: string; // gs:// path al comprobante (airtm) o subscriptionId (paypal)
+  manualBilling?: boolean;   // nunca se downgradeará — solo recordatorios mensuales
 }
 
 // ─── Activate plan after payment approval (PayPal legacy or AirTM proof) ─────
