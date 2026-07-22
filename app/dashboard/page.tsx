@@ -34,6 +34,8 @@ interface UserData {
   name: string;
   planId: string;
   apiKey?: string;
+  manualBilling?: boolean;
+  nextBillingDate?: { toDate: () => Date };
 }
 
 const PLAN_LABELS: Record<string, { label: string; color: string }> = {
@@ -56,6 +58,7 @@ function DashboardContent() {
   const [loading, setLoading]         = useState(true);
   const [generatingKey, setGeneratingKey] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [confirmingPayment, setConfirmingPayment] = useState(false);
   const [stores, setStores]           = useState<StoreConnection[]>([]);
   const [loadingStores, setLoadingStores] = useState(false);
   const [connectingStore, setConnectingStore] = useState(false);
@@ -181,6 +184,29 @@ function DashboardContent() {
   }
 
 
+  async function confirmPayment() {
+    if (!user) return;
+    setConfirmingPayment(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch("/api/billing/confirm-payment", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const next = new Date(data.nextBillingDate);
+        setPaymentMsg(`✓ Payment confirmed! Next reminder: ${next.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`);
+        const snap = await getDoc(doc(db, "users", user.uid));
+        if (snap.exists()) setUserData(snap.data() as UserData);
+      }
+    } catch {
+      alert("Error confirming payment. Please try again.");
+    } finally {
+      setConfirmingPayment(false);
+    }
+  }
+
   async function cancelPlan() {
     if (!user) return;
     const confirmed = window.confirm("Are you sure you want to cancel your plan? You will be downgraded to Free immediately.");
@@ -302,19 +328,36 @@ function DashboardContent() {
             <div>
               <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-1">Current plan</p>
               <p className={`text-xl font-semibold ${planInfo?.color}`}>{planInfo?.label ?? "Free"}</p>
+              {userData?.manualBilling && userData.nextBillingDate && (
+                <p className="text-xs text-white/30 mt-1">
+                  Next payment: {userData.nextBillingDate.toDate().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
-              <a href="/pricing" className="text-xs px-3 py-1.5 bg-[#7F77DD]/10 hover:bg-[#7F77DD]/20 border border-[#7F77DD]/20 text-[#7F77DD] rounded-lg transition-colors">
-                Upgrade →
-              </a>
-              {userData?.planId !== "free" && (
+              {userData?.manualBilling ? (
                 <button
-                  onClick={cancelPlan}
-                  disabled={cancelling}
-                  className="text-xs px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 rounded-lg transition-colors disabled:opacity-50"
+                  onClick={confirmPayment}
+                  disabled={confirmingPayment}
+                  className="text-xs px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 rounded-lg transition-colors disabled:opacity-50"
                 >
-                  {cancelling ? "Cancelling..." : "Cancel plan"}
+                  {confirmingPayment ? "Saving..." : "✓ I've paid"}
                 </button>
+              ) : (
+                <>
+                  <a href="/pricing" className="text-xs px-3 py-1.5 bg-[#7F77DD]/10 hover:bg-[#7F77DD]/20 border border-[#7F77DD]/20 text-[#7F77DD] rounded-lg transition-colors">
+                    Upgrade →
+                  </a>
+                  {userData?.planId !== "free" && (
+                    <button
+                      onClick={cancelPlan}
+                      disabled={cancelling}
+                      className="text-xs px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {cancelling ? "Cancelling..." : "Cancel plan"}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
