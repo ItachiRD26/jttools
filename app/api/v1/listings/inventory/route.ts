@@ -14,10 +14,20 @@
 //   /listings/inventory.
 //
 // PUT /api/v1/listings/inventory?listing_id=X&shop_id=Y
-//   Body: { products: [{ product_id, sku }, ...] }
+//   Body: { products: [{ product_id, sku?, price?, quantity? }, ...] }
 //   OAuth-required (listings_w). Etsy demands the full inventory shape on
-//   every PUT — this handler fetches current inventory, merges SKU updates
-//   by product_id, and writes back. Consumer only sends the changes.
+//   every PUT — this handler fetches current inventory, merges any of
+//   {sku, price, quantity} changes by product_id, and writes back.
+//   Consumer only sends the changes; every product row must include at
+//   least one of the three optional fields.
+//
+//   Multi-offering products (e.g. per-region pricing): price + quantity
+//   apply to the FIRST offering only, preserving the others' fields.
+//   Callers needing per-offering control can hit Etsy directly through
+//   the catch-all proxy.
+//
+//   Idempotent — submissions where every field already matches Etsy
+//   return productsUpdated: 0 + skipped count without an Etsy write.
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
@@ -27,10 +37,25 @@ import { getValidAccessToken, StoreNotConnectedError } from "@/lib/etsy-oauth";
 const ETSY_BASE = "https://openapi.etsy.com/v3";
 const API_KEY   = () => `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
 
-interface SkuUpdate {
+interface ProductUpdate {
   product_id: number;
-  sku:        string;
+  /** SKU rename. Undefined = leave the existing SKU alone. */
+  sku?:       string;
+  /** New per-unit price in the listing's currency (USD in the
+   *  common case). Undefined = leave every offering's price alone.
+   *  When set, applies to EVERY offering on the product — the vast
+   *  majority of Etsy inventory has one offering per product, and
+   *  the rare multi-offering case (per-region pricing) usually
+   *  wants a uniform update anyway. */
+  price?:     number;
+  /** New stock quantity. Undefined = leave every offering's
+   *  quantity alone. Applies to the first non-deleted offering
+   *  (Etsy's canonical primary). Set to 0 to mark out of stock. */
+  quantity?:  number;
 }
+
+/** Legacy alias for callers that only pass {product_id, sku}. */
+type SkuUpdate = ProductUpdate;
 
 type EtsyProduct = {
   product_id: number;
@@ -196,24 +221,63 @@ export async function PUT(req: NextRequest) {
     );
   }
 
-  const validatedUpdates: SkuUpdate[] = [];
+  const validatedUpdates: ProductUpdate[] = [];
   for (let i = 0; i < updates.length; i++) {
     const u = updates[i] as Record<string, unknown>;
     const pid = Number(u?.product_id);
-    const sku = u?.sku;
     if (!Number.isInteger(pid) || pid <= 0) {
       return NextResponse.json(
         { error: { code: "INVALID_REQUEST", status: 400, message: `products[${i}].product_id must be a positive integer.` } },
         { status: 400, headers: corsHeaders() }
       );
     }
-    if (typeof sku !== "string") {
+
+    const rec: ProductUpdate = { product_id: pid };
+
+    if (u?.sku !== undefined) {
+      if (typeof u.sku !== "string") {
+        return NextResponse.json(
+          { error: { code: "INVALID_REQUEST", status: 400, message: `products[${i}].sku must be a string.` } },
+          { status: 400, headers: corsHeaders() }
+        );
+      }
+      rec.sku = u.sku;
+    }
+
+    if (u?.price !== undefined && u.price !== null) {
+      const p = Number(u.price);
+      if (!Number.isFinite(p) || p < 0) {
+        return NextResponse.json(
+          { error: { code: "INVALID_REQUEST", status: 400, message: `products[${i}].price must be a non-negative number.` } },
+          { status: 400, headers: corsHeaders() }
+        );
+      }
+      rec.price = Number(p.toFixed(2));
+    }
+
+    if (u?.quantity !== undefined && u.quantity !== null) {
+      const q = Number(u.quantity);
+      if (!Number.isInteger(q) || q < 0) {
+        return NextResponse.json(
+          { error: { code: "INVALID_REQUEST", status: 400, message: `products[${i}].quantity must be a non-negative integer.` } },
+          { status: 400, headers: corsHeaders() }
+        );
+      }
+      rec.quantity = q;
+    }
+
+    // Row must actually change SOMETHING. Otherwise we'd read+merge
+    // for nothing and return "no changes" — but that's confusing at
+    // the API surface. Reject with a clear message so the caller
+    // realizes they forgot to send any field.
+    if (rec.sku === undefined && rec.price === undefined && rec.quantity === undefined) {
       return NextResponse.json(
-        { error: { code: "INVALID_REQUEST", status: 400, message: `products[${i}].sku must be a string.` } },
+        { error: { code: "INVALID_REQUEST", status: 400, message: `products[${i}] must include at least one of: sku, price, quantity.` } },
         { status: 400, headers: corsHeaders() }
       );
     }
-    validatedUpdates.push({ product_id: pid, sku });
+
+    validatedUpdates.push(rec);
   }
 
   // Resolve userId + OAuth token
@@ -308,13 +372,34 @@ export async function PUT(req: NextRequest) {
     );
   }
 
-  // Idempotency: drop no-op SKU updates. They don't count toward
-  // productsUpdated and don't fail. If every update is a no-op, skip the
-  // PUT entirely — saves an Etsy write call and protects against unrelated
-  // inventory state drifting in between read and write.
-  const currentSkuByProduct = new Map(current.products.map(p => [p.product_id, p.sku ?? ""]));
-  const changingUpdates     = validatedUpdates.filter(u => currentSkuByProduct.get(u.product_id) !== u.sku);
-  const skipped             = validatedUpdates.length - changingUpdates.length;
+  // Idempotency check. For each incoming update, compare each
+  // requested field against the CURRENT value; if none differ, treat
+  // the update as a no-op. When every incoming update is a no-op we
+  // skip the Etsy PUT entirely — saves an API call AND protects
+  // against unrelated inventory state drifting in between our read
+  // and our write.
+  const productLookup = new Map(current.products.map(p => [p.product_id, p]));
+  const changingUpdates: ProductUpdate[] = [];
+  for (const u of validatedUpdates) {
+    const p = productLookup.get(u.product_id);
+    if (!p) continue; // caught by PRODUCT_NOT_FOUND above
+    const primary =
+      p.offerings?.find(o => o.is_enabled && !o.is_deleted) ??
+      p.offerings?.find(o => !o.is_deleted) ??
+      p.offerings?.[0];
+    const curPrice = primary?.price
+      ? (typeof primary.price === "number"
+          ? primary.price
+          : Number((primary.price.amount / (primary.price.divisor || 100)).toFixed(2)))
+      : null;
+    const curQty  = primary?.quantity ?? null;
+    const curSku  = p.sku ?? "";
+    const skuChanges   = u.sku      !== undefined && u.sku      !== curSku;
+    const priceChanges = u.price    !== undefined && u.price    !== curPrice;
+    const qtyChanges   = u.quantity !== undefined && u.quantity !== curQty;
+    if (skuChanges || priceChanges || qtyChanges) changingUpdates.push(u);
+  }
+  const skipped = validatedUpdates.length - changingUpdates.length;
 
   if (changingUpdates.length === 0) {
     return NextResponse.json(
@@ -323,7 +408,7 @@ export async function PUT(req: NextRequest) {
         listing_id:      Number(listingId),
         productsUpdated: 0,
         skipped,
-        note:            "All submitted SKUs already match — no Etsy write performed.",
+        note:            "All submitted fields already match — no Etsy write performed.",
       },
       { status: 200, headers: { ...corsHeaders(), ...rateLimitHeaders(auth) } }
     );
@@ -335,10 +420,21 @@ export async function PUT(req: NextRequest) {
   // Per-offering readiness_state_id is preserved — without it Etsy returns
   // 400 "All offerings need readiness state" (same trap addressed in
   // lib/listing-builder.ts:932).
-  const skuByProduct = new Map(changingUpdates.map(u => [u.product_id, u.sku]));
+  const updateByProduct = new Map(changingUpdates.map(u => [u.product_id, u]));
   const mergedProducts = current.products.map(p => {
-    const newSku = skuByProduct.has(p.product_id) ? skuByProduct.get(p.product_id)! : (p.sku ?? "");
+    const u = updateByProduct.get(p.product_id);
+    const newSku = u?.sku ?? p.sku ?? "";
 
+    // Filter to enabled/non-deleted offerings for the write. Etsy
+    // preserves the deleted ones on its side; sending them back would
+    // duplicate.
+    const activeOfferings = (p.offerings ?? []).filter(o => o.is_deleted !== true);
+    // If the caller sent price / quantity, apply to the FIRST offering
+    // only (Etsy's canonical primary). Multi-offering per-region
+    // pricing preserves other offerings' fields untouched. Callers
+    // that need per-offering control can hit Etsy directly through
+    // the catch-all proxy.
+    let firstApplied = false;
     return {
       sku: newSku,
       property_values: (p.property_values ?? []).map(pv => ({
@@ -348,22 +444,27 @@ export async function PUT(req: NextRequest) {
         value_ids:     pv.value_ids ?? [],
         values:        pv.values   ?? [],
       })),
-      offerings: (p.offerings ?? [])
-        .filter(o => o.is_deleted !== true)
-        .map(o => {
-          const priceFloat = typeof o.price === "number"
-            ? o.price
-            : (o.price
-                ? Number((o.price.amount / (o.price.divisor || 100)).toFixed(2))
-                : 0);
-          const offering: Record<string, unknown> = {
-            price:      priceFloat,
-            quantity:   o.quantity ?? 0,
-            is_enabled: o.is_enabled !== false,
-          };
-          if (o.readiness_state_id) offering.readiness_state_id = o.readiness_state_id;
-          return offering;
-        }),
+      offerings: activeOfferings.map(o => {
+        const priceFloat = typeof o.price === "number"
+          ? o.price
+          : (o.price
+              ? Number((o.price.amount / (o.price.divisor || 100)).toFixed(2))
+              : 0);
+        let outPrice = priceFloat;
+        let outQty   = o.quantity ?? 0;
+        if (u && !firstApplied) {
+          if (u.price    !== undefined) outPrice = u.price;
+          if (u.quantity !== undefined) outQty   = u.quantity;
+          firstApplied = true;
+        }
+        const offering: Record<string, unknown> = {
+          price:      outPrice,
+          quantity:   outQty,
+          is_enabled: o.is_enabled !== false,
+        };
+        if (o.readiness_state_id) offering.readiness_state_id = o.readiness_state_id;
+        return offering;
+      }),
     };
   });
 
