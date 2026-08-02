@@ -121,8 +121,14 @@ export async function GET(
     scales: prop.scales ?? [],
   }));
 
+  // Variation options = properties that both support variations AND are real
+  // category attributes. Etsy's "Add a variation" dropdown shows exactly this
+  // intersection (e.g. Artificial Flower Arrangements → Width, Height, Primary
+  // color, Secondary color) — NOT every supports_variations property, which
+  // includes universal junk (TeeShirtSize/"Size", Device, Fabric, Flavor, …).
+  // "Create your own" (custom) covers anything this conservatively drops.
   const variationProperties = properties
-    .filter((p: { supports_variations: boolean }) => p.supports_variations)
+    .filter((p: { supports_variations?: boolean; supports_attributes?: boolean }) => p.supports_variations && p.supports_attributes)
     .map((p: { property_id: number; name: string; scales: unknown[] }) => ({
       property_id: p.property_id,
       name:        p.name,
