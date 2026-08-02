@@ -91,8 +91,14 @@ export async function GET(
   const data       = await res.json();
   const properties = data.results ?? [];
 
-  // Separate attributes from variation properties
-  const categoryAttributes = properties.map((prop: {
+  // Separate attributes from variation properties. Etsy flags each property with
+  // supports_attributes / supports_variations; a property only belongs in the
+  // Attributes section when supports_attributes is true. Without this filter,
+  // variation-only universal properties (Flavor, Scent, TeeShirtSize/"Size",
+  // Fabric, Device, …) leak into every category's attribute list.
+  const categoryAttributes = properties
+    .filter((p: { supports_attributes?: boolean }) => p.supports_attributes)
+    .map((prop: {
     property_id:        number;
     name:               string;
     supports_variations: boolean;
