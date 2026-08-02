@@ -53,9 +53,13 @@ export async function GET(
     );
   }
 
-  // Fetch category properties from Etsy
+  // Fetch category properties from Etsy. MUST use seller-taxonomy: listing
+  // taxonomy_ids (and our /categories/list) come from the seller taxonomy, which
+  // is a different node-id space than buyer-taxonomy. Querying buyer-taxonomy
+  // with a seller id 404s for whole branches (e.g. Craft Supplies → "Artificial
+  // Flowers"), which surfaced downstream as a permanent "Loading attributes…".
   const res = await fetch(
-    `${ETSY_BASE}/application/buyer-taxonomy/nodes/${taxId}/properties`,
+    `${ETSY_BASE}/application/seller-taxonomy/nodes/${taxId}/properties`,
     {
       headers: {
         "x-api-key": API_KEY(),
