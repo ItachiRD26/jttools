@@ -99,11 +99,13 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
     body,
   }),
 
-  "listings/delete": ({ shop_id, listing_id }) => ({
-    // Same shop-scoped path requirement as updateListing — bare
-    // `/application/listings/{id}` is GET-only.
+  "listings/delete": ({ listing_id }) => ({
+    // Etsy's `deleteListing` is the BARE path: DELETE /application/listings/{id}
+    // — unlike updateListing, the shop-scoped path 404s for DELETE. OAuth is
+    // still resolved from shop_id by the route handler (listings/delete is in
+    // OAUTH_REQUIRED), it's just not part of the delete URL.
     method: "DELETE",
-    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}`,
+    url: `${ETSY_BASE}/application/listings/${listing_id}`,
   }),
 
   "listings/images": ({ listing_id }) => ({
