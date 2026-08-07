@@ -529,7 +529,11 @@ async function setCategoryAttributes(
           `/application/shops/${shopId}/listings/${listingId}/properties/${propertyId}`,
           accessToken,
           {
-            value_ids: attr.value_ids,
+            // SCALE properties (Width/Height/Length/etc.) are free-form numbers:
+            // the value lives in `values` + `scale_id`, and value_ids MUST be empty.
+            // Sending value_ids=[15] made Etsy resolve 15 against its GLOBAL value
+            // table → garbage like Width="Bachelorette party". Force [] for scales.
+            value_ids: attr.scale_id ? [] : attr.value_ids,
             values:    attr.values,
             ...(attr.scale_id ? { scale_id: attr.scale_id } : {}),
           },
