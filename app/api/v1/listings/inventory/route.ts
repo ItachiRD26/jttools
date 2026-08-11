@@ -208,6 +208,17 @@ export async function PUT(req: NextRequest) {
     ? (rawBody as { products?: unknown }).products
     : undefined;
 
+  // Optional inventory-level flags naming which properties price / SKU / quantity
+  // vary on. Honor them from the request (default to Etsy's current below) so a
+  // caller can FLIP a listing from single-price to per-variation pricing — Etsy
+  // rejects varying prices ("price must be consistent across all products")
+  // unless price_on_property names the property they vary on.
+  const onProp = (v: unknown): number[] | undefined =>
+    Array.isArray(v) ? v.map(Number).filter((n) => Number.isInteger(n) && n > 0) : undefined;
+  const bodyPriceOnProp = onProp((rawBody as Record<string, unknown>).price_on_property);
+  const bodySkuOnProp   = onProp((rawBody as Record<string, unknown>).sku_on_property);
+  const bodyQtyOnProp   = onProp((rawBody as Record<string, unknown>).quantity_on_property);
+
   if (!Array.isArray(updates) || updates.length === 0) {
     return NextResponse.json(
       {
@@ -401,7 +412,17 @@ export async function PUT(req: NextRequest) {
   }
   const skipped = validatedUpdates.length - changingUpdates.length;
 
-  if (changingUpdates.length === 0) {
+  // A change to which properties price/SKU/qty vary on also warrants a write,
+  // even if the per-product fields all match (e.g. flipping to per-variation
+  // pricing where the numbers happen to already be set on Etsy).
+  const arrEq = (a?: number[], b?: number[]) =>
+    JSON.stringify([...(a ?? [])].sort()) === JSON.stringify([...(b ?? [])].sort());
+  const onPropChanged =
+    (bodyPriceOnProp !== undefined && !arrEq(bodyPriceOnProp, current.price_on_property)) ||
+    (bodySkuOnProp   !== undefined && !arrEq(bodySkuOnProp,   current.sku_on_property)) ||
+    (bodyQtyOnProp   !== undefined && !arrEq(bodyQtyOnProp,   current.quantity_on_property));
+
+  if (changingUpdates.length === 0 && !onPropChanged) {
     return NextResponse.json(
       {
         ok:              true,
@@ -470,9 +491,11 @@ export async function PUT(req: NextRequest) {
 
   const putBody = {
     products:             mergedProducts,
-    price_on_property:    current.price_on_property    ?? [],
-    quantity_on_property: current.quantity_on_property ?? [],
-    sku_on_property:      current.sku_on_property      ?? [],
+    // Caller override wins (lets ZCOM flip a listing to per-variation pricing/
+    // SKUs); otherwise preserve what Etsy already has.
+    price_on_property:    bodyPriceOnProp ?? current.price_on_property    ?? [],
+    quantity_on_property: bodyQtyOnProp   ?? current.quantity_on_property ?? [],
+    sku_on_property:      bodySkuOnProp   ?? current.sku_on_property      ?? [],
   };
 
   // ── Write merged inventory back ────────────────────────────────────────────
