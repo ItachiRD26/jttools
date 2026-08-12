@@ -571,9 +571,10 @@ export async function listListingImages(
   userId: string, shopId: number, listingId: number,
 ): Promise<{ ok: true; images: Array<{ listing_image_id: number; rank: number; url_fullxfull: string }> } | { ok: false; error: string }> {
   const accessToken = await getValidAccessToken(userId, String(shopId));
+  // Etsy's getListingImages is LISTING-scoped (not shop-scoped like upload/delete).
   const res = await etsyRequest(
     "GET",
-    `/application/shops/${shopId}/listings/${listingId}/images`,
+    `/application/listings/${listingId}/images`,
     accessToken,
   );
   if (!res.ok) {
