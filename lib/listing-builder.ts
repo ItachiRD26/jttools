@@ -459,53 +459,134 @@ async function resolveUploadUrl(url: string, db: Firestore): Promise<{ buffer: B
 
 // ─── Upload image to Etsy (URL or jt-upload:// → re-upload) ─────────────────
 
+export type ImageUploadResult =
+  | { ok: true; image: { listing_image_id: number; url_fullxfull: string; rank: number } }
+  | { ok: false; error: string };
+
+// Etsy image uploads flake transiently — especially the FIRST one right after
+// createDraftListing, before the new listing has fully settled. A single silent
+// failure used to permanently drop that image (usually the primary) because we
+// returned bare null with no retry and no reason. Retry a few times with
+// backoff, and on final failure return the REAL Etsy status/body so the caller
+// can surface it instead of a generic "upload failed".
 async function uploadImageToListing(
   shopId: number, listingId: number,
   imageUrl: string, rank: number,
   accessToken: string,
   db?: Firestore
-): Promise<{ listing_image_id: number; url_fullxfull: string; rank: number } | null> {
-  try {
-    let buffer: Buffer;
-    let contentType: string;
+): Promise<ImageUploadResult> {
+  let lastError = "unknown error";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      let buffer: Buffer;
+      let contentType: string;
 
-    if (imageUrl.startsWith("jt-upload://") && db) {
-      // Resolve from Firestore upload cache
-      const resolved = await resolveUploadUrl(imageUrl, db);
-      if (!resolved) throw new Error(`Upload file not found or expired: ${imageUrl}`);
-      buffer      = resolved.buffer;
-      contentType = resolved.contentType;
-    } else {
-      // Fetch from remote URL
-      const imgResp = await fetch(imageUrl);
-      if (!imgResp.ok) throw new Error(`Failed to fetch image: ${imageUrl}`);
-      buffer      = Buffer.from(await imgResp.arrayBuffer());
-      contentType = imgResp.headers.get("content-type") ?? "image/jpeg";
+      if (imageUrl.startsWith("jt-upload://") && db) {
+        // Resolve from Firestore upload cache
+        const resolved = await resolveUploadUrl(imageUrl, db);
+        if (!resolved) throw new Error(`Upload file not found or expired: ${imageUrl}`);
+        buffer      = resolved.buffer;
+        contentType = resolved.contentType;
+      } else {
+        // Fetch from remote URL
+        const imgResp = await fetch(imageUrl);
+        if (!imgResp.ok) throw new Error(`source fetch failed: HTTP ${imgResp.status}`);
+        buffer      = Buffer.from(await imgResp.arrayBuffer());
+        contentType = imgResp.headers.get("content-type") ?? "image/jpeg";
+      }
+
+      const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : "jpg";
+
+      const fd = new FormData();
+      fd.append("image", new Blob([new Uint8Array(buffer)], { type: contentType }), `image.${ext}`);
+      fd.append("rank",  String(rank));
+
+      const res = await etsyRequest(
+        "POST",
+        `/application/shops/${shopId}/listings/${listingId}/images`,
+        accessToken,
+        fd
+      );
+
+      if (res.ok) {
+        const data = await res.json();
+        return { ok: true, image: {
+          listing_image_id: data.listing_image_id,
+          url_fullxfull:    data.url_fullxfull ?? "",
+          rank:             data.rank ?? rank,
+        }};
+      }
+
+      const bodyText = await res.text().catch(() => "");
+      lastError = `Etsy ${res.status}: ${(bodyText || res.statusText).slice(0, 300)}`;
+      // 4xx other than 429 is a permanent rejection (bad image, bad listing) —
+      // retrying won't help, so surface it immediately.
+      if (res.status !== 429 && res.status < 500) return { ok: false, error: lastError };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
     }
-
-    const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : "jpg";
-
-    const fd = new FormData();
-    fd.append("image", new Blob([new Uint8Array(buffer)], { type: contentType }), `image.${ext}`);
-    fd.append("rank",  String(rank));
-
-    const res = await etsyRequest(
-      "POST",
-      `/application/shops/${shopId}/listings/${listingId}/images`,
-      accessToken,
-      fd
-    );
-
-    if (!res.ok) return null;
-    const data = await res.json();
-    return {
-      listing_image_id: data.listing_image_id,
-      url_fullxfull:    data.url_fullxfull ?? "",
-      rank:             data.rank ?? rank,
-    };
-  } catch {
-    return null;
+    if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 800)); // 0.8s, 1.6s
   }
+  return { ok: false, error: lastError };
+}
+
+// ─── Reconciliation helpers for an EXISTING listing (used by the images route) ─
+// Add / delete / list images on a listing that's already been created — this is
+// how the owner portal reconciles images on update: upload anything ZCOM has but
+// Etsy lacks (failed or newly added), and delete anything Etsy has but ZCOM
+// dropped. Each resolves the shop's access token the same way publishToShop does.
+
+export async function uploadImagesToExistingListing(
+  userId: string, shopId: number, listingId: number,
+  images: { url: string; rank: number }[],
+  db?: Firestore,
+): Promise<Array<{ rank: number; ok: boolean; listing_image_id?: number; error?: string }>> {
+  const accessToken = await getValidAccessToken(userId, String(shopId));
+  const out: Array<{ rank: number; ok: boolean; listing_image_id?: number; error?: string }> = [];
+  for (const img of [...images].sort((a, b) => a.rank - b.rank)) {
+    const r = await uploadImageToListing(shopId, listingId, img.url, img.rank, accessToken, db);
+    out.push(r.ok
+      ? { rank: img.rank, ok: true, listing_image_id: r.image.listing_image_id }
+      : { rank: img.rank, ok: false, error: r.error });
+  }
+  return out;
+}
+
+export async function deleteListingImage(
+  userId: string, shopId: number, listingId: number, listingImageId: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const accessToken = await getValidAccessToken(userId, String(shopId));
+  const res = await etsyRequest(
+    "DELETE",
+    `/application/shops/${shopId}/listings/${listingId}/images/${listingImageId}`,
+    accessToken,
+  );
+  // 404 = already gone → treat delete as idempotently successful.
+  if (res.ok || res.status === 404) return { ok: true };
+  const body = await res.text().catch(() => "");
+  return { ok: false, error: `Etsy ${res.status}: ${(body || res.statusText).slice(0, 300)}` };
+}
+
+export async function listListingImages(
+  userId: string, shopId: number, listingId: number,
+): Promise<{ ok: true; images: Array<{ listing_image_id: number; rank: number; url_fullxfull: string }> } | { ok: false; error: string }> {
+  const accessToken = await getValidAccessToken(userId, String(shopId));
+  const res = await etsyRequest(
+    "GET",
+    `/application/shops/${shopId}/listings/${listingId}/images`,
+    accessToken,
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    return { ok: false, error: `Etsy ${res.status}: ${(body || res.statusText).slice(0, 300)}` };
+  }
+  const data = await res.json();
+  const images = (data.results ?? []).map((i: Record<string, unknown>) => ({
+    listing_image_id: Number(i.listing_image_id),
+    rank: Number(i.rank),
+    url_fullxfull: (i.url_fullxfull as string) ?? "",
+  }));
+  return { ok: true, images };
 }
 
 // ─── Set category attributes ──────────────────────────────────────────────────
@@ -896,11 +977,11 @@ async function publishToShop(
     const sortedImages = [...body.images].sort((a, b) => a.rank - b.rank);
 
     for (const img of sortedImages) {
-      const uploaded = await uploadImageToListing(shopId, listingId, img.url, img.rank, accessToken, db);
-      if (uploaded) {
-        uploadedImages.push(uploaded);
+      const result = await uploadImageToListing(shopId, listingId, img.url, img.rank, accessToken, db);
+      if (result.ok) {
+        uploadedImages.push(result.image);
       } else {
-        warnings.push({ code: "IMAGE_UPLOAD_FAILED", fields: `images[${img.rank}].url`, reason: `Failed to upload image at rank ${img.rank}` });
+        warnings.push({ code: "IMAGE_UPLOAD_FAILED", fields: `images[${img.rank}].url`, reason: `Failed to upload image at rank ${img.rank}: ${result.error}` });
       }
     }
   }
