@@ -359,7 +359,7 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
 
 // ─── Build Etsy inventory from variations ────────────────────────────────────
 
-function buildEtsyInventory(variations: VariationsConfig, basePrice: number, readinessStateId: number): Record<string, unknown> {
+export function buildEtsyInventory(variations: VariationsConfig, basePrice: number, readinessStateId: number): Record<string, unknown> {
   const { properties, offerings } = variations;
 
   // Build property name → property info lookup
