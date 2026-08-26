@@ -1,13 +1,13 @@
 // LOCATION: app/api/v1/listings/variation-images/route.ts
 // POST /api/v1/listings/variation-images
-//   Body: { shop_id, listing_id, property, mapping: { "<value>": <imageIndex> } }
+//   Body: { shop_id, listing_id, property, mapping: { "<value>": <listing_image_id> } }
 //
 // Sets the variation→image links on an ALREADY-published listing (owner "update"
 // flow). The create endpoint links images inline; this lets an edit re-push the
 // associations after the owner adds/renames a variation or re-links a photo.
-// `mapping` is { value → 0-based index into the listing's images in display
-// order }; we resolve the real image_id (current images by rank) and value_id
-// (read back from inventory) live from Etsy. OAuth-required (listings_w).
+// `mapping` is { value → listing_image_id } — the caller resolves the concrete
+// Etsy image id per value (so it never depends on Etsy's image order); we resolve
+// the real value_id (read back from inventory) live. OAuth-required (listings_w).
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   const mapping = body.mapping && typeof body.mapping === "object" ? body.mapping : {};
   if (!shopId || !listingId) return bad("shop_id and listing_id are required.");
   if (!property) return bad("property (the image-bearing variation name) is required.");
-  if (!Object.keys(mapping).length) return bad("mapping { value: imageIndex } is required.");
+  if (!Object.keys(mapping).length) return bad("mapping { value: listing_image_id } is required.");
 
   try {
     const r = await setVariationImagesOnListing(a.userId, shopId, listingId, property, mapping);

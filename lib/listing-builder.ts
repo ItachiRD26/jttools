@@ -868,21 +868,21 @@ async function setVariationImages(
 }
 
 // Set variation→image links on an ALREADY-published listing (owner "update"
-// flow). The create path links images inline; this exposes the same logic for
-// edits — when the owner adds/renames a variation or re-links a photo after
-// publish, Etsy needs to be told the new (value → image) associations.
+// flow). The create path links images inline; this exposes the same capability
+// for edits — when the owner adds/renames a variation or re-links a photo after
+// publish, Etsy must be told the new (value → image) associations.
 //
-// Inputs mirror the source of truth on the portal: `property` = the image-
-// bearing variation name, `mapping` = { "<value>": <0-based index into the
-// listing's images in display order> }. We resolve everything else live from
-// Etsy: the image at each index (current images, ordered by rank) and the real
-// value_id per value (read back from inventory inside setVariationImages).
+// `property` = the image-bearing variation name. `mapping` = { "<value>":
+// <listing_image_id> } — the CALLER resolves the concrete Etsy image id for each
+// value (it knows which image each variation points at), so this never depends
+// on Etsy's image order. We resolve only the real value_id per value live from
+// inventory (Etsy auto-assigns those; retry across its read-after-write window).
 export async function setVariationImagesOnListing(
   userId: string,
   shopId: number,
   listingId: number,
   property: string,
-  mapping: Record<string, number>,
+  mapping: Record<string, number>, // value -> listing_image_id
 ): Promise<{ ok: boolean; error?: string; etsy_status?: number; etsy_error?: unknown; payload_sent?: unknown; linked?: number }> {
   let accessToken: string;
   try {
@@ -891,28 +891,49 @@ export async function setVariationImagesOnListing(
     return { ok: false, error: `Shop ${shopId} is not connected. Connect it at jeterdev.tools/dashboard.` };
   }
 
-  // Current images, ordered by rank → index 0 = rank 1 = the portal's image #1.
-  const imgRes = await listListingImages(userId, shopId, listingId);
-  if (!imgRes.ok) return { ok: false, error: `Couldn't read the listing's images: ${imgRes.error}` };
-  const uploadedImages = [...imgRes.images].sort((a, b) => a.rank - b.rank);
-
-  // Find the property_id for the image-bearing variation from live inventory.
-  const invRes = await etsyRequest("GET", `/application/listings/${listingId}/inventory`, accessToken);
-  if (!invRes.ok) return { ok: false, error: `Couldn't read inventory (${invRes.status}) to resolve the variation.` };
-  const invData = await invRes.json();
   const propName = property.toLowerCase();
   let propertyId = 0;
-  for (const product of (invData.products ?? [])) {
-    for (const pv of (product.property_values ?? [])) {
-      if (String(pv.property_name ?? "").toLowerCase() === propName && pv.property_id) { propertyId = pv.property_id; break; }
+  const valueIdByValue: Record<string, number> = {};
+  const invDelays = [0, 500, 1500, 3000];
+  for (let attempt = 0; attempt < invDelays.length; attempt++) {
+    if (invDelays[attempt]) await new Promise((r) => setTimeout(r, invDelays[attempt]));
+    const invRes = await etsyRequest("GET", `/application/listings/${listingId}/inventory`, accessToken);
+    if (!invRes.ok) continue;
+    const invData = await invRes.json();
+    for (const product of (invData.products ?? [])) {
+      for (const pv of (product.property_values ?? [])) {
+        if (String(pv.property_name ?? "").toLowerCase() !== propName) continue;
+        if (pv.property_id) propertyId = pv.property_id;
+        const val = (pv.values ?? [])[0];
+        const vid = (pv.value_ids ?? [])[0];
+        if (val != null && Number(vid) >= 1) valueIdByValue[String(val)] = Number(vid);
+      }
     }
-    if (propertyId) break;
+    if (propertyId && Object.keys(valueIdByValue).length) break;
   }
   if (!propertyId) return { ok: false, error: `Variation '${property}' not found on the live listing.` };
 
-  const properties: VariationProperty[] = [{ property_id: propertyId, name: property, values: [] }];
-  const res = await setVariationImages(shopId, listingId, { property, mapping }, properties, uploadedImages, accessToken);
-  return res.ok ? { ok: true, linked: Object.keys(mapping).length } : res;
+  const entries: { property_id: number; value_id: number; image_id: number }[] = [];
+  for (const [value, imageId] of Object.entries(mapping)) {
+    const valueId = valueIdByValue[value];
+    if (!valueId) { console.warn(`[variation-images] no Etsy value_id for "${value}" — skipping`); continue; }
+    if (!imageId || Number(imageId) < 1) continue;
+    entries.push({ property_id: propertyId, value_id: valueId, image_id: Number(imageId) });
+  }
+  if (!entries.length) return { ok: false, error: "No variation→image links resolved (value_ids not found on the live listing yet)." };
+
+  const payload = { variation_images: entries };
+  const postDelays = [0, 1000, 2000];
+  let lastRes: Response | null = null;
+  for (let attempt = 0; attempt < postDelays.length; attempt++) {
+    if (postDelays[attempt]) await new Promise((r) => setTimeout(r, postDelays[attempt]));
+    lastRes = await etsyRequest("POST", `/application/shops/${shopId}/listings/${listingId}/variation-images`, accessToken, payload);
+    if (lastRes.ok) return { ok: true, linked: entries.length };
+    if (lastRes.status !== 404) break;
+  }
+  const errText = await lastRes!.text();
+  let errBody: unknown; try { errBody = JSON.parse(errText); } catch { errBody = errText; }
+  return { ok: false, etsy_status: lastRes!.status, etsy_error: errBody, payload_sent: payload };
 }
 
 // ─── Publish to a single shop ─────────────────────────────────────────────────
