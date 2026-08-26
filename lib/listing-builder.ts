@@ -867,6 +867,54 @@ async function setVariationImages(
   };
 }
 
+// Set variation→image links on an ALREADY-published listing (owner "update"
+// flow). The create path links images inline; this exposes the same logic for
+// edits — when the owner adds/renames a variation or re-links a photo after
+// publish, Etsy needs to be told the new (value → image) associations.
+//
+// Inputs mirror the source of truth on the portal: `property` = the image-
+// bearing variation name, `mapping` = { "<value>": <0-based index into the
+// listing's images in display order> }. We resolve everything else live from
+// Etsy: the image at each index (current images, ordered by rank) and the real
+// value_id per value (read back from inventory inside setVariationImages).
+export async function setVariationImagesOnListing(
+  userId: string,
+  shopId: number,
+  listingId: number,
+  property: string,
+  mapping: Record<string, number>,
+): Promise<{ ok: boolean; error?: string; etsy_status?: number; etsy_error?: unknown; payload_sent?: unknown; linked?: number }> {
+  let accessToken: string;
+  try {
+    accessToken = await getValidAccessToken(userId, String(shopId));
+  } catch {
+    return { ok: false, error: `Shop ${shopId} is not connected. Connect it at jeterdev.tools/dashboard.` };
+  }
+
+  // Current images, ordered by rank → index 0 = rank 1 = the portal's image #1.
+  const imgRes = await listListingImages(userId, shopId, listingId);
+  if (!imgRes.ok) return { ok: false, error: `Couldn't read the listing's images: ${imgRes.error}` };
+  const uploadedImages = [...imgRes.images].sort((a, b) => a.rank - b.rank);
+
+  // Find the property_id for the image-bearing variation from live inventory.
+  const invRes = await etsyRequest("GET", `/application/listings/${listingId}/inventory`, accessToken);
+  if (!invRes.ok) return { ok: false, error: `Couldn't read inventory (${invRes.status}) to resolve the variation.` };
+  const invData = await invRes.json();
+  const propName = property.toLowerCase();
+  let propertyId = 0;
+  for (const product of (invData.products ?? [])) {
+    for (const pv of (product.property_values ?? [])) {
+      if (String(pv.property_name ?? "").toLowerCase() === propName && pv.property_id) { propertyId = pv.property_id; break; }
+    }
+    if (propertyId) break;
+  }
+  if (!propertyId) return { ok: false, error: `Variation '${property}' not found on the live listing.` };
+
+  const properties: VariationProperty[] = [{ property_id: propertyId, name: property, values: [] }];
+  const res = await setVariationImages(shopId, listingId, { property, mapping }, properties, uploadedImages, accessToken);
+  return res.ok ? { ok: true, linked: Object.keys(mapping).length } : res;
+}
+
 // ─── Publish to a single shop ─────────────────────────────────────────────────
 
 async function publishToShop(
