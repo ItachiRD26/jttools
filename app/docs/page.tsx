@@ -1073,6 +1073,43 @@ function ListingCreate() {
         </div>
       </div>
       <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-3">
+        <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">listing.listing_type values</p>
+        <p className="text-xs text-white/50 leading-relaxed">
+          Controls whether Etsy treats the listing as physical or digital. Anything other than{" "}
+          <code className="font-mono bg-white/6 px-1 rounded">&quot;physical&quot;</code> (or omitting the field) waives the{" "}
+          <code className="font-mono bg-white/6 px-1 rounded">shops[].shipping_profile_id</code> /{" "}
+          <code className="font-mono bg-white/6 px-1 rounded">return_policy_id</code> requirement.
+        </p>
+        <div className="border border-white/6 rounded-lg overflow-hidden">
+          {([
+            ["physical (default)", "Physical product.", "shipping_profile_id and return_policy_id required."],
+            ["download / digital",  "Instant-download listing.", "No shipping profile needed. After the create call returns a listing_id, attach the file with POST /media/file/upload."],
+            ["both",                "Physical product that also includes a digital download.", "Same shipping/return requirements as physical."],
+          ] as [string,string,string][]).map(([val, label, desc]) => (
+            <div key={val} className="grid grid-cols-12 text-xs px-4 py-3 border-b border-white/4 last:border-0 items-start gap-2">
+              <div className="col-span-3 font-mono text-white/60 text-[11px]">{val}</div>
+              <div className="col-span-3 text-white/40">{label}</div>
+              <div className="col-span-6 text-white/40">{desc}</div>
+            </div>
+          ))}
+        </div>
+        <CodeBlock code={`"listing": {
+  "title": "Sewing Pattern PDF", "description": "Instant download...",
+  "listing_type": "download", "taxonomy_id": 2078,
+  "price": 5.00, "quantity": 999,
+  "who_made": "i_did", "when_made": "2020_2026",
+  "sku": "PATTERN-001"
+}
+// shops[0] does NOT need shipping_profile_id / return_policy_id here`} lang="json" />
+        <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
+          <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest mb-1">digital_files on this endpoint is ignored</p>
+          <p className="text-xs text-white/50 leading-relaxed">
+            <code className="font-mono bg-white/6 px-1 rounded">POST /listings/create</code> only creates the listing shell — it does not attach downloadable files. Upload the actual file(s) separately with{" "}
+            <code className="font-mono bg-white/6 px-1 rounded">POST /media/file/upload?shop_id=&amp;listing_id=</code> once you have the <code className="font-mono bg-white/6 px-1 rounded">listing_id</code> from the create response.
+          </p>
+        </div>
+      </div>
+      <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-3">
         <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">processing_profile_id resolution</p>
         <p className="text-xs text-white/50 leading-relaxed">
           <code className="font-mono bg-white/6 px-1 rounded">shops[0].processing_profile_id</code> must be a real Etsy readiness state ID obtained from{" "}

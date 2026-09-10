@@ -311,8 +311,22 @@ function sanitiseTags(tags: string[]): string[] {
     .filter(Boolean);
 }
 
+// Etsy's createDraftListing takes `type` (physical|download|both), not
+// `listing_type` — that's the name of the field on the *read* shape
+// (getListing) only. Unknown keys are silently dropped by Etsy, so sending
+// `listing_type` verbatim left every non-physical create defaulting to
+// physical and dying on the shipping_profile_id check.
+// Accept "digital" as a synonym for "download" — it's what callers have
+// actually sent in the wild, even though it isn't one of Etsy's own values.
+function mapEtsyListingType(listingType: ListingData["listing_type"]): "physical" | "download" | "both" {
+  if (listingType === "download" || (listingType as string) === "digital") return "download";
+  if (listingType === "both") return "both";
+  return "physical";
+}
+
 function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): Record<string, unknown> {
   const price = shopConfig.price ?? listing.price;
+  const etsyType = mapEtsyListingType(listing.listing_type);
 
   const payload: Record<string, unknown> = {
     title:            listing.title,
@@ -323,7 +337,7 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
     who_made:          listing.who_made,
     when_made:         listing.when_made,
     taxonomy_id:       listing.taxonomy_id,
-    listing_type:      listing.listing_type ?? "physical",
+    type:              etsyType,
     tags:              sanitiseTags(listing.tags ?? []),
     materials:         sanitiseMaterials(listing.materials ?? []),
     styles:            listing.styles ?? [],
@@ -350,7 +364,10 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   if (listing.processing_max) payload.processing_max = listing.processing_max;
   const injectedReadiness = (shopConfig as unknown as Record<string, unknown>)._readiness_state_id;
   if (injectedReadiness) payload.readiness_state_id = injectedReadiness;
-  if (shopConfig.production_partner_ids?.length) {
+  // Production partners are a physical-manufacturing concept — don't attach
+  // them to download listings even if the shop config carries them over
+  // from a physical listing template.
+  if (etsyType !== "download" && shopConfig.production_partner_ids?.length) {
     payload.production_partner_ids = shopConfig.production_partner_ids;
   }
 
