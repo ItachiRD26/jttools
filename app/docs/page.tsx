@@ -968,7 +968,7 @@ await fetch(\`\${BASE}/listings/create\`, {
           {[
             ["image",   "JPG, PNG, GIF, WebP", "Max 100MB · No per-listing limit"],
             ["video",   "MP4, MOV, MPEG",       "Max 100MB · Max 1 per listing"],
-            ["digital", "PDF, ZIP, SVG, PNG",   "Max 100MB · Max 10 per listing"],
+            ["digital", "PDF, ZIP, SVG, PNG",   "Max 20MB · Max 5 per listing (Etsy's cap, not the upload cap)"],
           ].map(([type, formats, limit]) => (
             <div key={String(type)} className="bg-white/3 border border-white/6 rounded-xl p-3">
               <div className="text-xs font-mono text-white/50 uppercase mb-1">{String(type)}</div>
@@ -1083,7 +1083,7 @@ function ListingCreate() {
         <div className="border border-white/6 rounded-lg overflow-hidden">
           {([
             ["physical (default)", "Physical product.", "shipping_profile_id and return_policy_id required."],
-            ["download / digital",  "Instant-download listing.", "No shipping profile needed. After the create call returns a listing_id, attach the file with POST /media/file/upload."],
+            ["download / digital",  "Instant-download listing.", "No shipping profile needed. Attach files via digital_files on this same call."],
             ["both",                "Physical product that also includes a digital download.", "Same shipping/return requirements as physical."],
           ] as [string,string,string][]).map(([val, label, desc]) => (
             <div key={val} className="grid grid-cols-12 text-xs px-4 py-3 border-b border-white/4 last:border-0 items-start gap-2">
@@ -1093,20 +1093,33 @@ function ListingCreate() {
             </div>
           ))}
         </div>
-        <CodeBlock code={`"listing": {
-  "title": "Sewing Pattern PDF", "description": "Instant download...",
-  "listing_type": "download", "taxonomy_id": 2078,
-  "price": 5.00, "quantity": 999,
-  "who_made": "i_did", "when_made": "2020_2026",
-  "sku": "PATTERN-001"
+        <CodeBlock code={`{
+  "state": "publish",
+  "shops": [{ "shop_id": 61004439 }],
+  "listing": {
+    "title": "Sewing Pattern PDF", "description": "Instant download...",
+    "listing_type": "download", "taxonomy_id": 2078,
+    "price": 5.00, "quantity": 999,
+    "who_made": "i_did", "when_made": "2020_2026",
+    "sku": "PATTERN-001"
+  },
+  "digital_files": [
+    { "url": "jt-upload://jt_e9c31cec...", "name": "pattern-front.pdf" },
+    { "url": "jt-upload://jt_a01b77fe...", "name": "pattern-back.pdf" }
+  ]
 }
 // shops[0] does NOT need shipping_profile_id / return_policy_id here`} lang="json" />
-        <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
-          <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest mb-1">digital_files on this endpoint is ignored</p>
+        <div className="bg-white/3 border border-white/6 rounded-lg p-3 space-y-2">
+          <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest mb-1">How digital_files works</p>
           <p className="text-xs text-white/50 leading-relaxed">
-            <code className="font-mono bg-white/6 px-1 rounded">POST /listings/create</code> only creates the listing shell — it does not attach downloadable files. Upload the actual file(s) separately with{" "}
-            <code className="font-mono bg-white/6 px-1 rounded">POST /media/file/upload?shop_id=&amp;listing_id=</code> once you have the <code className="font-mono bg-white/6 px-1 rounded">listing_id</code> from the create response.
+            Each entry references a file already uploaded via the presign flow (<code className="font-mono bg-white/6 px-1 rounded">POST /uploads/presign</code> → PUT → <code className="font-mono bg-white/6 px-1 rounded">POST /uploads/confirm</code>) — same as images. After the Etsy listing is created, the bridge streams each file from storage straight to Etsy server-side; the bytes never pass through your request.
           </p>
+          <ul className="text-xs text-white/50 leading-relaxed list-disc pl-4 space-y-1">
+            <li><strong className="text-white/70">Limits are Etsy&apos;s, not ours:</strong> max <strong className="text-white/70">5 files</strong>, max <strong className="text-white/70">20MB</strong> each. Exceeding either is rejected with a 400 before the listing is created — nothing gets created half-finished.</li>
+            <li><code className="font-mono bg-white/6 px-1 rounded">name</code> becomes the filename shown to the buyer on the download page (letters, numbers, periods, hyphens, underscores only — anything else is stripped, falling back to the original uploaded filename).</li>
+            <li>If a file fails to attach after the listing is created, the job result carries a <code className="font-mono bg-white/6 px-1 rounded">DIGITAL_FILE_UPLOAD_FAILED</code> warning naming the file — the response is never a bare &quot;ok&quot; with files silently missing.</li>
+            <li><code className="font-mono bg-white/6 px-1 rounded">digital_files</code> is optional — a digital listing without it still creates fine; attach files later with <code className="font-mono bg-white/6 px-1 rounded">POST /media/file/upload</code>.</li>
+          </ul>
         </div>
       </div>
       <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-3">
@@ -1174,6 +1187,7 @@ function ListingCreate() {
             ["SKU_SET_FAILED",         "listing.sku", "SKU inventory PUT failed for a single-item listing. Listing published but skus: [] on Etsy. Re-publish or patch manually."],
             ["VARIATION_IMAGES_FAILED","variation_images", "Variation image mapping POST failed. Listing and inventory are correct but images are not linked to color/size values."],
             ["ATTRIBUTES_SET_FAILED",  "category_attributes", "One or more category attribute PUTs failed. Listing published but attributes missing — affects search filtering on Etsy."],
+            ["DIGITAL_FILE_UPLOAD_FAILED", "digital_files", "One or more digital files failed to attach after the listing was created. Listing exists but is missing a downloadable file — not sellable until fixed. Re-attach with POST /media/file/upload."],
           ] as [string,string,string][]).map(([code, fields, desc]) => (
             <div key={code} className="grid grid-cols-12 text-xs px-4 py-2.5 border-b border-white/4 last:border-0 items-start">
               <div className="col-span-4 font-mono text-amber-400/80 text-[11px]">{code}</div>
