@@ -499,7 +499,10 @@ export async function PUT(req: NextRequest) {
   };
 
   // ── Write merged inventory back ────────────────────────────────────────────
-  const writeRes = await fetch(`${ETSY_BASE}/application/listings/${listingId}/inventory`, {
+  // max_variations_supported=3: a listing that already HAS three variations
+  // 409s ("Could not update inventory") on any PUT without it, even a plain
+  // price/SKU merge. Harmless for 1- and 2-variation listings.
+  const writeRes = await fetch(`${ETSY_BASE}/application/listings/${listingId}/inventory?max_variations_supported=3`, {
     method:  "PUT",
     headers: {
       "x-api-key":     API_KEY(),

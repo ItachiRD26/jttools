@@ -149,8 +149,10 @@ export function validatePayload(body: CreateListingBody): ValidationError[] {
   if (body.listing?.title && body.listing.title.length > 140) {
     errors.push({ field: "listing.title", reason: "Title must be 140 characters or less" });
   }
-  if (body.variations?.properties && body.variations.properties.length > 2) {
-    errors.push({ field: "variations.properties", reason: "Maximum 2 variation properties allowed" });
+  // Etsy v3 supports up to THREE variation properties (max_variations_supported=3
+  // on the inventory PUT; developers.etsy.com/documentation/tutorials/third-variation).
+  if (body.variations?.properties && body.variations.properties.length > 3) {
+    errors.push({ field: "variations.properties", reason: "Maximum 3 variation properties allowed" });
   }
 
   // Physical listing needs shipping + return policy
@@ -379,7 +381,8 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
       const value = offering[key] as string;
       return {
         property_id:   prop.property_id,
-        // Custom variation properties (513=Flowers, 514=Color) use free-text values.
+        // Custom variation properties (513 / 514 / 516 = first / second / third custom
+        // variation, e.g. 513=Flowers, 514=Color) use free-text values.
         // value_ids must be [] (empty) — sending [0] causes Etsy 404 "Resource not found".
         // Standard taxonomy properties may have real value_ids but we don't have them here,
         // so we always send [] and let Etsy match by values[] text.
@@ -410,6 +413,10 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
   // Sending only properties[0] on a 2-property listing causes Etsy 400:
   //   "price must be consistent across linked products" / SKU mismatch.
   // Etsy accepts an array of property_ids — include every property that participates.
+  // With three variations Etsy allows exactly zero, one, or ALL three ids here (two →
+  // "unsupported number of property IDs"), so all-or-nothing stays correct. Note Etsy
+  // caps a 3-variation listing at 2500 products, or 400 when any *_on_property lists
+  // every property.
   const allPropertyIds = properties.map(p => p.property_id).filter(Boolean);
   const priceOnProp  = allSamePrice  ? [] : allPropertyIds;
   const skuOnProp    = allUniqueSkus ? allPropertyIds : [];
@@ -1135,7 +1142,10 @@ async function publishToShop(
   // ── Path A: variations inventory ─────────────────────────────────────────
   if (hasVariations) {
     const inventory = buildEtsyInventory(body.variations!, body.listing.price, readinessStateId);
-    const INVENTORY_URL = `/application/listings/${listingId}/inventory`;
+    // max_variations_supported=3: without it Etsy rejects a third variation with
+    // 400 "unsupported number of variations. The maximum ... is 2". Harmless on
+    // 1- and 2-variation writes.
+    const INVENTORY_URL = `/application/listings/${listingId}/inventory?max_variations_supported=3`;
 
     let invRes: Response | null = null;
     const delays = [1000, 2000, 3000];

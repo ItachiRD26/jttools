@@ -122,7 +122,9 @@ export async function PUT(req: NextRequest) {
     );
   }
 
-  const writeRes = await fetch(`${ETSY_BASE}/application/listings/${listingId}/inventory`, {
+  // max_variations_supported=3 — accepts a third variation property and lets a
+  // 3-variation listing be replaced with a 2-variation matrix (409 without it).
+  const writeRes = await fetch(`${ETSY_BASE}/application/listings/${listingId}/inventory?max_variations_supported=3`, {
     method:  "PUT",
     headers: { ...etsyHeaders, "Content-Type": "application/json" },
     body:    JSON.stringify(putBody),

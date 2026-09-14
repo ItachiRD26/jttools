@@ -1040,6 +1040,9 @@ function ListingCreate() {
     "variation_images": { "property": "color", "mapping": { "Black": 0, "White": 1 } }
   }
 }`} lang="json" />
+        <p className="text-xs text-white/40 mt-2">
+          Up to <span className="text-white/70">three</span> variation properties are supported (Etsy&apos;s third-variation API — the bridge sends <code className="font-mono bg-white/6 px-1 rounded">max_variations_supported=3</code> on every inventory write, including <code className="font-mono bg-white/6 px-1 rounded">PUT /listings/inventory</code> and <code className="font-mono bg-white/6 px-1 rounded">PUT /listings/inventory/replace</code>). Each offering must name a value for every property. Custom (free-text) variation properties use <code className="font-mono bg-white/6 px-1 rounded">property_id</code> 513, 514 and 516 for the first, second and third. Etsy limits a three-variation listing to 2,500 products, or 400 when price or SKU varies by all three properties.
+        </p>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
