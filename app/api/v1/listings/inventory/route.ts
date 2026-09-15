@@ -500,11 +500,7 @@ export async function PUT(req: NextRequest) {
   };
 
   // ── Write merged inventory back ────────────────────────────────────────────
-  // Property count comes from what Etsy's GET just returned (this endpoint
-  // never lets the caller change property_values) — a listing that already
-  // has 3 variations gets rejected on write without the param too.
-  const propertyCount = Math.max(0, ...current.products.map(p => p.property_values?.length ?? 0));
-  const writeUrl = withVariationsParam(`${ETSY_BASE}/application/listings/${listingId}/inventory`, propertyCount);
+  const writeUrl = withVariationsParam(`${ETSY_BASE}/application/listings/${listingId}/inventory`);
   const writeRes = await fetch(writeUrl, {
     method:  "PUT",
     headers: {

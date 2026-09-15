@@ -122,7 +122,7 @@ export async function PUT(req: NextRequest) {
     );
   }
 
-  const writeUrl = withVariationsParam(`${ETSY_BASE}/application/listings/${listingId}/inventory`, props.length);
+  const writeUrl = withVariationsParam(`${ETSY_BASE}/application/listings/${listingId}/inventory`);
   const writeRes = await fetch(writeUrl, {
     method:  "PUT",
     headers: { ...etsyHeaders, "Content-Type": "application/json" },

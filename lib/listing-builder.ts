@@ -474,13 +474,17 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
 
 // Etsy's updateListingInventory rejects a payload carrying 3 variations
 // UNLESS this query param is present (omitting it or passing 2 both 400 —
-// per developer.etsy.com/documentation/tutorials/third-variation). Every
-// inventory PUT in this codebase must run its property count through this
-// before hitting Etsy, including PUTs that just echo back an existing
-// listing's current property_values (they still carry all 3 if the listing
-// already has 3, and still get rejected without the param).
-export function withVariationsParam(url: string, propertyCount: number): string {
-  if (propertyCount < 3) return url;
+// per developer.etsy.com/documentation/tutorials/third-variation). Confirmed
+// empirically (see 0851c4a) that this ALSO applies to a listing that already
+// HAS 3 variations stored on Etsy's side — any PUT to it, even a plain
+// price/SKU merge that isn't touching variations at all, 409s without the
+// param. Since that depends on Etsy's current state rather than what this
+// particular write's payload contains, it can't be reliably conditioned on
+// the outgoing property count — Etsy documents the param as harmless on 1-
+// and 2-variation writes, so every inventory PUT in this codebase always
+// sends it rather than trying to track "does this listing currently have 3
+// variations" at each call site.
+export function withVariationsParam(url: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}max_variations_supported=3`;
 }
 
@@ -506,7 +510,8 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
       const value = offering[key] as string;
       return {
         property_id:   prop.property_id,
-        // Custom variation properties (513=Flowers, 514=Color) use free-text values.
+        // Custom variation properties (513 / 514 / 516 = first / second / third custom
+        // variation, e.g. 513=Flowers, 514=Color) use free-text values.
         // value_ids must be [] (empty) — sending [0] causes Etsy 404 "Resource not found".
         // Standard taxonomy properties may have real value_ids but we don't have them here,
         // so we always send [] and let Etsy match by values[] text.
@@ -537,6 +542,10 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
   // Sending only properties[0] on a 2-property listing causes Etsy 400:
   //   "price must be consistent across linked products" / SKU mismatch.
   // Etsy accepts an array of property_ids — include every property that participates.
+  // With three variations Etsy allows exactly zero, one, or ALL three ids here (two →
+  // "unsupported number of property IDs"), so all-or-nothing stays correct. Note Etsy
+  // caps a 3-variation listing at 2500 products, or 400 when any *_on_property lists
+  // every property.
   const allPropertyIds = properties.map(p => p.property_id).filter(Boolean);
   const priceOnProp  = allSamePrice  ? [] : allPropertyIds;
   const skuOnProp    = allUniqueSkus ? allPropertyIds : [];
@@ -1354,10 +1363,7 @@ async function publishToShop(
   // ── Path A: variations inventory ─────────────────────────────────────────
   if (hasVariations) {
     const inventory = buildEtsyInventory(body.variations!, body.listing.price, readinessStateId);
-    const INVENTORY_URL = withVariationsParam(
-      `/application/listings/${listingId}/inventory`,
-      body.variations!.properties.length
-    );
+    const INVENTORY_URL = withVariationsParam(`/application/listings/${listingId}/inventory`);
 
     let invRes: Response | null = null;
     const delays = [1000, 2000, 3000];
