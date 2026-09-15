@@ -160,8 +160,10 @@ export function validatePayload(body: CreateListingBody): ValidationError[] {
   if (body.listing?.title && body.listing.title.length > 140) {
     errors.push({ field: "listing.title", reason: "Title must be 140 characters or less" });
   }
-  if (body.variations?.properties && body.variations.properties.length > 2) {
-    errors.push({ field: "variations.properties", reason: "Maximum 2 variation properties allowed" });
+  // Etsy raised this from 2 to 3 in August 2026 — writes with 3 need
+  // ?max_variations_supported=3 on the inventory PUT (see withVariationsParam).
+  if (body.variations?.properties && body.variations.properties.length > 3) {
+    errors.push({ field: "variations.properties", reason: "Maximum 3 variation properties allowed" });
   }
 
   // Physical listing needs shipping + return policy
@@ -468,6 +470,18 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   }
 
   return payload;
+}
+
+// Etsy's updateListingInventory rejects a payload carrying 3 variations
+// UNLESS this query param is present (omitting it or passing 2 both 400 —
+// per developer.etsy.com/documentation/tutorials/third-variation). Every
+// inventory PUT in this codebase must run its property count through this
+// before hitting Etsy, including PUTs that just echo back an existing
+// listing's current property_values (they still carry all 3 if the listing
+// already has 3, and still get rejected without the param).
+export function withVariationsParam(url: string, propertyCount: number): string {
+  if (propertyCount < 3) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}max_variations_supported=3`;
 }
 
 // ─── Build Etsy inventory from variations ────────────────────────────────────
@@ -1340,7 +1354,10 @@ async function publishToShop(
   // ── Path A: variations inventory ─────────────────────────────────────────
   if (hasVariations) {
     const inventory = buildEtsyInventory(body.variations!, body.listing.price, readinessStateId);
-    const INVENTORY_URL = `/application/listings/${listingId}/inventory`;
+    const INVENTORY_URL = withVariationsParam(
+      `/application/listings/${listingId}/inventory`,
+      body.variations!.properties.length
+    );
 
     let invRes: Response | null = null;
     const delays = [1000, 2000, 3000];

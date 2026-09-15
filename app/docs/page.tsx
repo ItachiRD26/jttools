@@ -1073,6 +1073,23 @@ function ListingCreate() {
         </div>
       </div>
       <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-3">
+        <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">Up to 3 variation properties</p>
+        <p className="text-xs text-white/50 leading-relaxed">
+          Etsy raised the limit from 2 to 3 variation properties in August 2026. <code className="font-mono bg-white/6 px-1 rounded">variations.properties</code> accepts up to 3 entries — each <code className="font-mono bg-white/6 px-1 rounded">offerings[]</code> row then needs a value for all 3 (matched by the lowercased <code className="font-mono bg-white/6 px-1 rounded">name</code>, same as with 2). The bridge adds Etsy&apos;s required <code className="font-mono bg-white/6 px-1 rounded">max_variations_supported=3</code> query param automatically on every inventory write — you don&apos;t need to pass it yourself, here or on <code className="font-mono bg-white/6 px-1 rounded">PUT /listings/inventory</code> / <code className="font-mono bg-white/6 px-1 rounded">PUT /listings/inventory/replace</code>.
+        </p>
+        <CodeBlock code={`"variations": {
+  "properties": [
+    { "property_id": 200,         "name": "Color", "values": ["Black","White"] },
+    { "property_id": 62809790533, "name": "Size",  "scale_id": 17, "values": ["S","M"] },
+    { "property_id": 513,         "name": "Material", "values": ["Cotton","Linen"] }
+  ],
+  "offerings": [
+    { "color": "Black", "size": "S", "material": "Cotton", "price": 29.99, "quantity": 10, "sku": "BLK-S-CTN" },
+    { "color": "White", "size": "M", "material": "Linen",  "price": 34.99, "quantity": 8,  "sku": "WHT-M-LIN" }
+  ]
+}`} lang="json" />
+      </div>
+      <div className="border border-[#7F77DD]/25 rounded-xl p-4 space-y-3">
         <p className="text-[10px] font-mono text-[#7F77DD] uppercase tracking-widest">listing.listing_type values</p>
         <p className="text-xs text-white/50 leading-relaxed">
           Controls whether Etsy treats the listing as physical or digital. Anything other than{" "}

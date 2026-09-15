@@ -33,6 +33,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
 import { getDb } from "@/lib/firebase-admin";
 import { getValidAccessToken, StoreNotConnectedError } from "@/lib/etsy-oauth";
+import { withVariationsParam } from "@/lib/listing-builder";
 
 const ETSY_BASE = "https://openapi.etsy.com/v3";
 const API_KEY   = () => `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
@@ -499,7 +500,12 @@ export async function PUT(req: NextRequest) {
   };
 
   // ── Write merged inventory back ────────────────────────────────────────────
-  const writeRes = await fetch(`${ETSY_BASE}/application/listings/${listingId}/inventory`, {
+  // Property count comes from what Etsy's GET just returned (this endpoint
+  // never lets the caller change property_values) — a listing that already
+  // has 3 variations gets rejected on write without the param too.
+  const propertyCount = Math.max(0, ...current.products.map(p => p.property_values?.length ?? 0));
+  const writeUrl = withVariationsParam(`${ETSY_BASE}/application/listings/${listingId}/inventory`, propertyCount);
+  const writeRes = await fetch(writeUrl, {
     method:  "PUT",
     headers: {
       "x-api-key":     API_KEY(),

@@ -14,7 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
 import { getDb } from "@/lib/firebase-admin";
 import { getValidAccessToken, StoreNotConnectedError } from "@/lib/etsy-oauth";
-import { buildEtsyInventory } from "@/lib/listing-builder";
+import { buildEtsyInventory, withVariationsParam } from "@/lib/listing-builder";
 
 const ETSY_BASE = "https://openapi.etsy.com/v3";
 const API_KEY   = () => `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
@@ -122,7 +122,8 @@ export async function PUT(req: NextRequest) {
     );
   }
 
-  const writeRes = await fetch(`${ETSY_BASE}/application/listings/${listingId}/inventory`, {
+  const writeUrl = withVariationsParam(`${ETSY_BASE}/application/listings/${listingId}/inventory`, props.length);
+  const writeRes = await fetch(writeUrl, {
     method:  "PUT",
     headers: { ...etsyHeaders, "Content-Type": "application/json" },
     body:    JSON.stringify(putBody),
