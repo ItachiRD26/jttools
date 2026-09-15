@@ -8,6 +8,8 @@ import { getDb } from "@/lib/firebase-admin";
 import {
   createListing,
   validatePayload,
+  validateDigitalFiles,
+  resolveDigitalFiles,
   type CreateListingBody,
 } from "@/lib/listing-builder";
 
@@ -61,6 +63,27 @@ export async function POST(req: NextRequest) {
   }
 
   if (body.state !== "draft") {
+    // ── Preflight: digital file limits (Etsy's real caps: 5 files / 20MB each) ──
+    // Rejected here, before any Etsy call, so a listing is never created
+    // silently missing the files that make it sellable.
+    const digitalFiles = resolveDigitalFiles(body);
+    if (digitalFiles?.length) {
+      const digitalFileErrors = await validateDigitalFiles(digitalFiles, db);
+      if (digitalFileErrors.length > 0) {
+        return NextResponse.json(
+          {
+            error: {
+              code:    "VALIDATION_FAILED",
+              status:  400,
+              message: "Request validation failed.",
+              fields:  Object.fromEntries(digitalFileErrors.map(e => [e.field, e.reason])),
+            },
+          },
+          { status: 400, headers: corsHeaders() }
+        );
+      }
+    }
+
     // ── Preflight: verify all shops connected ─────────────────────────────
     const notOwned: string[] = [];
     for (const shop of body.shops) {

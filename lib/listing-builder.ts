@@ -2,10 +2,11 @@
 // Orchestrates listing creation: draft (Firestore only) | publish | active (Etsy API)
 // Handles multi-shop, variations, category attributes, images, personalization
 
-import { getDb } from "./firebase-admin";
+import { getDb, getAdminApp } from "./firebase-admin";
 import type { Firestore } from "firebase-admin/firestore";
 import { getValidAccessToken } from "./etsy-oauth";
 import { FieldValue } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
 
 const ETSY_BASE = "https://openapi.etsy.com/v3";
 const API_KEY   = () => `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
@@ -104,6 +105,15 @@ export interface CreateListingBody {
   variations?:         VariationsConfig;
 }
 
+// digital_files is documented at the top level (sibling of `listing`, same
+// as `images`), but real caller payloads have also nested it inside
+// `listing` — accept either so callers aren't broken by the ambiguity.
+export function resolveDigitalFiles(body: CreateListingBody): DigitalFile[] | undefined {
+  return body.digital_files?.length
+    ? body.digital_files
+    : (body.listing as unknown as { digital_files?: DigitalFile[] })?.digital_files;
+}
+
 export interface ShopResult {
   shop_id:             string;
   status:              "ok" | "error";
@@ -113,6 +123,7 @@ export interface ShopResult {
   price?:              number;
   images?:             { listing_image_id: number; url_fullxfull: string; rank: number }[];
   videos?:             unknown[];
+  digital_files?:      { listing_file_id: number; filename: string }[];
   activated?:          boolean;
   activation_cost_usd?: number;
   warnings?:           { code: string; fields: string; reason: string }[];
@@ -178,6 +189,82 @@ export function validatePayload(body: CreateListingBody): ValidationError[] {
         errors.push({ field: `images[${i}].rank`, reason: "Image rank must be 1 or greater" });
       }
     });
+  }
+
+  return errors;
+}
+
+// ─── Digital file validation ──────────────────────────────────────────────────
+// Etsy's real limits for listing files (getListingFiles/uploadListingFile) are
+// 5 files max, 20MB each — NOT the 100MB/10-file limits the uploads flow was
+// originally built for (those apply to images/video). Enforce Etsy's numbers
+// here so an oversized/over-count digital_files payload is rejected with a
+// clear 400 before anything is created on Etsy, instead of silently producing
+// a listing with no files attached.
+const DIGITAL_FILE_MAX_COUNT = 5;
+const DIGITAL_FILE_MAX_BYTES = 20 * 1024 * 1024;
+
+// Firestore-only lookup (no bytes fetched) — used both for validation and to
+// resolve the storage path before the real upload.
+async function getUploadMeta(url: string, db: Firestore): Promise<
+  | { ok: true; storagePath: string; size: number; filename: string }
+  | { ok: false; error: string }
+> {
+  if (!url.startsWith("jt-upload://")) {
+    return { ok: false, error: `Not a jt-upload:// reference: ${url}` };
+  }
+  const uploadId = url.replace("jt-upload://", "");
+  const snap = await db.collection("uploads").doc(uploadId).get();
+  if (!snap.exists) return { ok: false, error: `Upload not found or expired: ${url}` };
+
+  const data = snap.data()!;
+  const expiresAt: Date = data.expiresAt?.toDate?.() ?? new Date(0);
+  if (new Date() > expiresAt) return { ok: false, error: `Upload expired: ${url}` };
+  if (!data.storagePath) return { ok: false, error: `Upload has no storage path (unsupported for digital files): ${url}` };
+
+  return { ok: true, storagePath: data.storagePath, size: data.size ?? 0, filename: data.filename ?? "file" };
+}
+
+// Validates digital_files BEFORE any Etsy call. Size is checked against the
+// actual object in Storage rather than the client-reported size at presign
+// time (that field is optional and can be absent/stale).
+export async function validateDigitalFiles(
+  digitalFiles: DigitalFile[] | undefined,
+  db: Firestore
+): Promise<ValidationError[]> {
+  const errors: ValidationError[] = [];
+  if (!digitalFiles?.length) return errors;
+
+  if (digitalFiles.length > DIGITAL_FILE_MAX_COUNT) {
+    errors.push({
+      field:  "digital_files",
+      reason: `Etsy allows a maximum of ${DIGITAL_FILE_MAX_COUNT} digital files per listing (got ${digitalFiles.length}).`,
+    });
+    return errors;
+  }
+
+  getAdminApp();
+  const bucket = getStorage().bucket();
+  const maxMb = DIGITAL_FILE_MAX_BYTES / (1024 * 1024);
+
+  for (let i = 0; i < digitalFiles.length; i++) {
+    const meta = await getUploadMeta(digitalFiles[i].url, db);
+    if (!meta.ok) {
+      errors.push({ field: `digital_files[${i}].url`, reason: meta.error });
+      continue;
+    }
+    try {
+      const [storageMeta] = await bucket.file(meta.storagePath).getMetadata();
+      const size = Number(storageMeta.size ?? meta.size ?? 0);
+      if (size > DIGITAL_FILE_MAX_BYTES) {
+        errors.push({
+          field:  `digital_files[${i}]`,
+          reason: `File exceeds Etsy's ${maxMb}MB limit for digital files (${(size / (1024 * 1024)).toFixed(1)}MB).`,
+        });
+      }
+    } catch {
+      errors.push({ field: `digital_files[${i}].url`, reason: "Could not verify uploaded file — it may have expired." });
+    }
   }
 
   return errors;
@@ -313,8 +400,31 @@ function sanitiseTags(tags: string[]): string[] {
     .filter(Boolean);
 }
 
+// Etsy's uploadListingFile only accepts letters, numbers, periods, hyphens,
+// and underscores in the `name` field. Falls back to the stored upload
+// filename (also sanitised) if the caller's name is empty or entirely
+// stripped away, then to a generic "file" so we never send an empty string.
+function sanitiseDigitalFileName(name: string | undefined, fallback: string): string {
+  const clean = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "");
+  return clean(name ?? "") || clean(fallback) || "file";
+}
+
+// Etsy's createDraftListing takes `type` (physical|download|both), not
+// `listing_type` — that's the name of the field on the *read* shape
+// (getListing) only. Unknown keys are silently dropped by Etsy, so sending
+// `listing_type` verbatim left every non-physical create defaulting to
+// physical and dying on the shipping_profile_id check.
+// Accept "digital" as a synonym for "download" — it's what callers have
+// actually sent in the wild, even though it isn't one of Etsy's own values.
+function mapEtsyListingType(listingType: ListingData["listing_type"]): "physical" | "download" | "both" {
+  if (listingType === "download" || (listingType as string) === "digital") return "download";
+  if (listingType === "both") return "both";
+  return "physical";
+}
+
 function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): Record<string, unknown> {
   const price = shopConfig.price ?? listing.price;
+  const etsyType = mapEtsyListingType(listing.listing_type);
 
   const payload: Record<string, unknown> = {
     title:            listing.title,
@@ -325,7 +435,7 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
     who_made:          listing.who_made,
     when_made:         listing.when_made,
     taxonomy_id:       listing.taxonomy_id,
-    listing_type:      listing.listing_type ?? "physical",
+    type:              etsyType,
     tags:              sanitiseTags(listing.tags ?? []),
     materials:         sanitiseMaterials(listing.materials ?? []),
     styles:            listing.styles ?? [],
@@ -352,7 +462,10 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   if (listing.processing_max) payload.processing_max = listing.processing_max;
   const injectedReadiness = (shopConfig as unknown as Record<string, unknown>)._readiness_state_id;
   if (injectedReadiness) payload.readiness_state_id = injectedReadiness;
-  if (shopConfig.production_partner_ids?.length) {
+  // Production partners are a physical-manufacturing concept — don't attach
+  // them to download listings even if the shop config carries them over
+  // from a physical listing template.
+  if (etsyType !== "download" && shopConfig.production_partner_ids?.length) {
     payload.production_partner_ids = shopConfig.production_partner_ids;
   }
 
@@ -535,6 +648,82 @@ async function uploadImageToListing(
     if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 800)); // 0.8s, 1.6s
   }
   return { ok: false, error: lastError };
+}
+
+// ─── Upload digital files to a listing (instant-download attachments) ────────
+// Same shape as uploadImageToListing: resolve the jt-upload:// reference to
+// bytes already sitting in Storage (client uploaded them directly via
+// presign→PUT→confirm) and forward to Etsy. The client's upload never passes
+// through this function's own request body, so Vercel's inbound payload cap
+// never comes into play here — only the 20MB Etsy limit (enforced earlier by
+// validateDigitalFiles) matters.
+
+export type DigitalFileUploadResult =
+  | { ok: true; file: { listing_file_id: number; filename: string } }
+  | { ok: false; error: string };
+
+async function uploadDigitalFileToListing(
+  shopId: number, listingId: number,
+  file: DigitalFile, rank: number,
+  accessToken: string, db: Firestore
+): Promise<DigitalFileUploadResult> {
+  let lastError = "unknown error";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const resolved = await resolveUploadUrl(file.url, db);
+      if (!resolved) throw new Error(`Upload file not found or expired: ${file.url}`);
+
+      const filename = sanitiseDigitalFileName(file.name, resolved.filename);
+
+      const fd = new FormData();
+      fd.append("file", new Blob([new Uint8Array(resolved.buffer)], { type: resolved.contentType }), filename);
+      fd.append("name", filename);
+      fd.append("rank", String(rank));
+
+      const res = await etsyRequest(
+        "POST",
+        `/application/shops/${shopId}/listings/${listingId}/files`,
+        accessToken,
+        fd
+      );
+
+      if (res.ok) {
+        const data = await res.json();
+        return { ok: true, file: {
+          listing_file_id: data.listing_file_id,
+          filename:        data.filename ?? filename,
+        }};
+      }
+
+      const bodyText = await res.text().catch(() => "");
+      lastError = `Etsy ${res.status}: ${(bodyText || res.statusText).slice(0, 300)}`;
+      // 4xx other than 429 is a permanent rejection — retrying won't help.
+      if (res.status !== 429 && res.status < 500) return { ok: false, error: lastError };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+    if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 800));
+  }
+  return { ok: false, error: lastError };
+}
+
+async function uploadDigitalFilesToListing(
+  shopId: number, listingId: number,
+  files: DigitalFile[], accessToken: string, db: Firestore
+): Promise<{
+  uploaded: { listing_file_id: number; filename: string }[];
+  failures: { name?: string; error: string }[];
+}> {
+  const uploaded: { listing_file_id: number; filename: string }[] = [];
+  const failures: { name?: string; error: string }[] = [];
+
+  for (let i = 0; i < files.length; i++) {
+    const result = await uploadDigitalFileToListing(shopId, listingId, files[i], i + 1, accessToken, db);
+    if (result.ok) uploaded.push(result.file);
+    else failures.push({ name: files[i].name, error: result.error });
+  }
+
+  return { uploaded, failures };
 }
 
 // ─── Reconciliation helpers for an EXISTING listing (used by the images route) ─
@@ -1044,6 +1233,7 @@ async function publishToShop(
   const warnings: { code: string; fields: string; reason: string }[] = [];
   const uploadedImages: { listing_image_id: number; url_fullxfull: string; rank: number }[] = [];
   const uploadedVideos: unknown[] = [];
+  const uploadedDigitalFiles: { listing_file_id: number; filename: string }[] = [];
 
   // 2. Upload images
   // Etsy supports up to 10 images per listing. For listings with more than 10,
@@ -1060,6 +1250,21 @@ async function publishToShop(
       } else {
         warnings.push({ code: "IMAGE_UPLOAD_FAILED", fields: `images[${img.rank}].url`, reason: `Failed to upload image at rank ${img.rank}: ${result.error}` });
       }
+    }
+  }
+
+  // 2b. Upload digital files (instant-download attachments)
+  const digitalFiles = resolveDigitalFiles(body);
+
+  if (digitalFiles?.length) {
+    const { uploaded, failures } = await uploadDigitalFilesToListing(shopId, listingId, digitalFiles, accessToken, db);
+    uploadedDigitalFiles.push(...uploaded);
+    for (const f of failures) {
+      warnings.push({
+        code:   "DIGITAL_FILE_UPLOAD_FAILED",
+        fields: "digital_files",
+        reason: `Failed to attach digital file${f.name ? ` "${f.name}"` : ""}: ${f.error}`,
+      });
     }
   }
 
@@ -1238,6 +1443,7 @@ async function publishToShop(
     price:      listingPrice,
     images:     uploadedImages,
     videos:     uploadedVideos,
+    digital_files: uploadedDigitalFiles,
     activated,
     activation_cost_usd: state === "active" ? 0.20 : 0,
     warnings,
