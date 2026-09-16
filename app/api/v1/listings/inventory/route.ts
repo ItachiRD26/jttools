@@ -33,6 +33,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
 import { getDb } from "@/lib/firebase-admin";
 import { getValidAccessToken, StoreNotConnectedError } from "@/lib/etsy-oauth";
+import { withVariationsParam } from "@/lib/listing-builder";
 
 const ETSY_BASE = "https://openapi.etsy.com/v3";
 const API_KEY   = () => `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
@@ -499,10 +500,8 @@ export async function PUT(req: NextRequest) {
   };
 
   // ── Write merged inventory back ────────────────────────────────────────────
-  // max_variations_supported=3: a listing that already HAS three variations
-  // 409s ("Could not update inventory") on any PUT without it, even a plain
-  // price/SKU merge. Harmless for 1- and 2-variation listings.
-  const writeRes = await fetch(`${ETSY_BASE}/application/listings/${listingId}/inventory?max_variations_supported=3`, {
+  const writeUrl = withVariationsParam(`${ETSY_BASE}/application/listings/${listingId}/inventory`);
+  const writeRes = await fetch(writeUrl, {
     method:  "PUT",
     headers: {
       "x-api-key":     API_KEY(),

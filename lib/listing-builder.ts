@@ -160,8 +160,8 @@ export function validatePayload(body: CreateListingBody): ValidationError[] {
   if (body.listing?.title && body.listing.title.length > 140) {
     errors.push({ field: "listing.title", reason: "Title must be 140 characters or less" });
   }
-  // Etsy v3 supports up to THREE variation properties (max_variations_supported=3
-  // on the inventory PUT; developers.etsy.com/documentation/tutorials/third-variation).
+  // Etsy raised this from 2 to 3 in August 2026 — writes with 3 need
+  // ?max_variations_supported=3 on the inventory PUT (see withVariationsParam).
   if (body.variations?.properties && body.variations.properties.length > 3) {
     errors.push({ field: "variations.properties", reason: "Maximum 3 variation properties allowed" });
   }
@@ -470,6 +470,22 @@ function buildEtsyListingPayload(shopConfig: ShopConfig, listing: ListingData): 
   }
 
   return payload;
+}
+
+// Etsy's updateListingInventory rejects a payload carrying 3 variations
+// UNLESS this query param is present (omitting it or passing 2 both 400 —
+// per developer.etsy.com/documentation/tutorials/third-variation). Confirmed
+// empirically (see 0851c4a) that this ALSO applies to a listing that already
+// HAS 3 variations stored on Etsy's side — any PUT to it, even a plain
+// price/SKU merge that isn't touching variations at all, 409s without the
+// param. Since that depends on Etsy's current state rather than what this
+// particular write's payload contains, it can't be reliably conditioned on
+// the outgoing property count — Etsy documents the param as harmless on 1-
+// and 2-variation writes, so every inventory PUT in this codebase always
+// sends it rather than trying to track "does this listing currently have 3
+// variations" at each call site.
+export function withVariationsParam(url: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}max_variations_supported=3`;
 }
 
 // ─── Build Etsy inventory from variations ────────────────────────────────────
@@ -1353,10 +1369,7 @@ async function publishToShop(
   // ── Path A: variations inventory ─────────────────────────────────────────
   if (hasVariations) {
     const inventory = buildEtsyInventory(body.variations!, body.listing.price, readinessStateId);
-    // max_variations_supported=3: without it Etsy rejects a third variation with
-    // 400 "unsupported number of variations. The maximum ... is 2". Harmless on
-    // 1- and 2-variation writes.
-    const INVENTORY_URL = `/application/listings/${listingId}/inventory?max_variations_supported=3`;
+    const INVENTORY_URL = withVariationsParam(`/application/listings/${listingId}/inventory`);
 
     let invRes: Response | null = null;
     const delays = [1000, 2000, 3000];
