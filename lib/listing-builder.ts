@@ -484,6 +484,11 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
   // Detect what varies
   const prices    = offerings.map(o => o.price as number);
   const allSamePrice = prices.every(p => p === prices[0]);
+  // Per-variation stock: Etsy rejects differing quantities unless
+  // quantity_on_property names the property(ies) — "quantity must be
+  // consistent across all products" otherwise. Same rule price already follows.
+  const qtys      = offerings.map(o => (o.quantity as number) ?? 1);
+  const allSameQty = qtys.every(q => q === qtys[0]);
   const skus      = offerings.map(o => o.sku as string).filter(Boolean);
   const allUniqueSkus = skus.length === offerings.length && new Set(skus).size === offerings.length;
 
@@ -532,9 +537,10 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
   // every property.
   const allPropertyIds = properties.map(p => p.property_id).filter(Boolean);
   const priceOnProp  = allSamePrice  ? [] : allPropertyIds;
+  const qtyOnProp    = allSameQty    ? [] : allPropertyIds;
   const skuOnProp    = allUniqueSkus ? allPropertyIds : [];
 
-  return { products, price_on_property: priceOnProp, quantity_on_property: [], sku_on_property: skuOnProp };
+  return { products, price_on_property: priceOnProp, quantity_on_property: qtyOnProp, sku_on_property: skuOnProp };
 }
 
 // ─── Resolve jt-upload:// URL → binary buffer ────────────────────────────────
