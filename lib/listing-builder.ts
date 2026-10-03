@@ -490,6 +490,38 @@ export function withVariationsParam(url: string): string {
 
 // ─── Build Etsy inventory from variations ────────────────────────────────────
 
+// sku_on_property must name the property(ies) the SKU actually changes with.
+//   • every product the same SKU (or all blank)  → []  (SKU doesn't vary)
+//   • the SKU is set by ONE property — every product with the same value of
+//     it has the same SKU ("SKUs for each Shade Design" on a design × plug
+//     listing: 10 SKUs, each on 4 products)        → [that property]
+//   • otherwise                                     → all properties
+// The old rule was "all-unique → all properties, else []". The middle case
+// is neither all-unique nor all-same, so it sent [] and Etsy rejected the
+// 10 differing SKUs as inconsistent. Etsy accepts zero, one, or ALL property
+// ids here (two of three is unsupported), which this always returns.
+function skuOnProperty(
+  offerings: Record<string, unknown>[],
+  properties: VariationProperty[],
+  allPropertyIds: number[],
+): number[] {
+  const skus = offerings.map(o => String((o.sku as string) ?? ""));
+  if (skus.every(s => s === skus[0])) return [];
+  for (const prop of properties) {
+    if (!prop.property_id) continue;
+    const key = prop.name.toLowerCase();
+    const skuFor = new Map<string, string>();
+    let setByThisProperty = true;
+    offerings.forEach((o, i) => {
+      const v = String(o[key] ?? "");
+      if (skuFor.has(v) && skuFor.get(v) !== skus[i]) setByThisProperty = false;
+      else skuFor.set(v, skus[i]);
+    });
+    if (setByThisProperty) return [prop.property_id];
+  }
+  return allPropertyIds;
+}
+
 export function buildEtsyInventory(variations: VariationsConfig, basePrice: number, readinessStateId: number): Record<string, unknown> {
   const { properties, offerings } = variations;
 
@@ -505,8 +537,6 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
   // consistent across all products" otherwise. Same rule price already follows.
   const qtys      = offerings.map(o => (o.quantity as number) ?? 1);
   const allSameQty = qtys.every(q => q === qtys[0]);
-  const skus      = offerings.map(o => o.sku as string).filter(Boolean);
-  const allUniqueSkus = skus.length === offerings.length && new Set(skus).size === offerings.length;
 
   // Build products
   const products = offerings.map(offering => {
@@ -554,7 +584,7 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
   const allPropertyIds = properties.map(p => p.property_id).filter(Boolean);
   const priceOnProp  = allSamePrice  ? [] : allPropertyIds;
   const qtyOnProp    = allSameQty    ? [] : allPropertyIds;
-  const skuOnProp    = allUniqueSkus ? allPropertyIds : [];
+  const skuOnProp    = skuOnProperty(offerings, properties, allPropertyIds);
 
   return { products, price_on_property: priceOnProp, quantity_on_property: qtyOnProp, sku_on_property: skuOnProp };
 }
