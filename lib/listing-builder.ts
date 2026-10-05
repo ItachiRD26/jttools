@@ -490,36 +490,51 @@ export function withVariationsParam(url: string): string {
 
 // ─── Build Etsy inventory from variations ────────────────────────────────────
 
-// sku_on_property must name the property(ies) the SKU actually changes with.
-//   • every product the same SKU (or all blank)  → []  (SKU doesn't vary)
-//   • the SKU is set by ONE property — every product with the same value of
-//     it has the same SKU ("SKUs for each Shade Design" on a design × plug
-//     listing: 10 SKUs, each on 4 products)        → [that property]
-//   • otherwise                                     → all properties
-// The old rule was "all-unique → all properties, else []". The middle case
-// is neither all-unique nor all-same, so it sent [] and Etsy rejected the
-// 10 differing SKUs as inconsistent. Etsy accepts zero, one, or ALL property
-// ids here (two of three is unsupported), which this always returns.
-function skuOnProperty(
+// *_on_property must name the property(ies) a field actually changes with:
+//   • every product the same (or all blank)   → []  (doesn't vary)
+//   • set by ONE property — every product with the same value of it has the
+//     same field value ("SKUs / prices for each Shade Design" on a design ×
+//     plug listing)                             → [that property]
+//   • otherwise                                 → all properties
+// Price used to be all-or-nothing; with SKU set per Shade Design that sent
+// price [513,514] + sku [513], which Etsy rejects (see reconcileOnProperty).
+// A single property is only returned when the field is genuinely constant
+// within each of its values — the old "price must be consistent across linked
+// products" 400 came from naming properties[0] blindly, not from this.
+function varyingProperties(
+  vals: string[],
   offerings: Record<string, unknown>[],
   properties: VariationProperty[],
   allPropertyIds: number[],
 ): number[] {
-  const skus = offerings.map(o => String((o.sku as string) ?? ""));
-  if (skus.every(s => s === skus[0])) return [];
+  if (vals.every(v => v === vals[0])) return [];
   for (const prop of properties) {
     if (!prop.property_id) continue;
     const key = prop.name.toLowerCase();
-    const skuFor = new Map<string, string>();
+    const valFor = new Map<string, string>();
     let setByThisProperty = true;
     offerings.forEach((o, i) => {
       const v = String(o[key] ?? "");
-      if (skuFor.has(v) && skuFor.get(v) !== skus[i]) setByThisProperty = false;
-      else skuFor.set(v, skus[i]);
+      if (valFor.has(v) && valFor.get(v) !== vals[i]) setByThisProperty = false;
+      else valFor.set(v, vals[i]);
     });
     if (setByThisProperty) return [prop.property_id];
   }
   return allPropertyIds;
+}
+
+// Etsy: "Supports only zero or all N variation properties, as at least one
+// *_on_property field is linked to all N properties" — and the fields must
+// agree. If the non-empty sets differ (price on all + SKU on one, or price on
+// one property + SKU on another), widen every non-empty one to ALL properties;
+// empty ones stay empty. Identical sets (price + SKU both per Shade Design)
+// pass through unchanged.
+function reconcileOnProperty(sets: number[][], allPropertyIds: number[]): number[][] {
+  const nonEmpty = sets.filter(s => s.length > 0);
+  if (nonEmpty.length <= 1) return sets;
+  const key = (s: number[]) => [...s].sort((a, b) => a - b).join(",");
+  const same = nonEmpty.every(s => key(s) === key(nonEmpty[0]));
+  return same ? sets : sets.map(s => (s.length ? allPropertyIds : []));
 }
 
 export function buildEtsyInventory(variations: VariationsConfig, basePrice: number, readinessStateId: number): Record<string, unknown> {
@@ -529,14 +544,6 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
   const propByName: Record<string, VariationProperty> = {};
   properties.forEach(p => { propByName[p.name.toLowerCase()] = p; });
 
-  // Detect what varies
-  const prices    = offerings.map(o => o.price as number);
-  const allSamePrice = prices.every(p => p === prices[0]);
-  // Per-variation stock: Etsy rejects differing quantities unless
-  // quantity_on_property names the property(ies) — "quantity must be
-  // consistent across all products" otherwise. Same rule price already follows.
-  const qtys      = offerings.map(o => (o.quantity as number) ?? 1);
-  const allSameQty = qtys.every(q => q === qtys[0]);
 
   // Build products
   const products = offerings.map(offering => {
@@ -582,9 +589,16 @@ export function buildEtsyInventory(variations: VariationsConfig, basePrice: numb
   // caps a 3-variation listing at 2500 products, or 400 when any *_on_property lists
   // every property.
   const allPropertyIds = properties.map(p => p.property_id).filter(Boolean);
-  const priceOnProp  = allSamePrice  ? [] : allPropertyIds;
-  const qtyOnProp    = allSameQty    ? [] : allPropertyIds;
-  const skuOnProp    = skuOnProperty(offerings, properties, allPropertyIds);
+  // Same effective values the products above carry (price falls back to the
+  // base price, quantity to 1, SKU to "").
+  const priceVals = offerings.map(o => String((o.price as number) ?? basePrice));
+  const qtyVals   = offerings.map(o => String((o.quantity as number) ?? 1));
+  const skuVals   = offerings.map(o => String((o.sku as string) ?? ""));
+  const [priceOnProp, qtyOnProp, skuOnProp] = reconcileOnProperty([
+    varyingProperties(priceVals, offerings, properties, allPropertyIds),
+    varyingProperties(qtyVals, offerings, properties, allPropertyIds),
+    varyingProperties(skuVals, offerings, properties, allPropertyIds),
+  ], allPropertyIds);
 
   return { products, price_on_property: priceOnProp, quantity_on_property: qtyOnProp, sku_on_property: skuOnProp };
 }
