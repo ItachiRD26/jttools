@@ -609,6 +609,12 @@ export async function proxyEtsyRequest(
   };
 
   const res = await fetch(url, fetchOpts);
+  // Etsy answers a successful DELETE with 204 No Content. Report it as 200
+  // {deleted:true}: a 204 can't carry a JSON body, and NextResponse.json(…,
+  // {status:204}) throws — every successful delete surfaced as a 500.
+  if (res.status === 204) {
+    return { ok: true, status: 200, data: { deleted: true } };
+  }
   const data = await res.json().catch(() => ({ error: "Non-JSON response from Etsy" }));
 
   return { ok: res.ok, status: res.status, data };
