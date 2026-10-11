@@ -35,6 +35,13 @@ const OAUTH_REQUIRED = new Set([
   "policies/refund", "policies/refund/create", "policies/refund/update", "policies/refund/delete",
   "policies/shipping", "policies/payment",
   "shipping/create", "shipping/update", "shipping/delete",
+  // Store settings — every one of these needs the shop's token (shops_r / shops_w).
+  "shipping/profiles", "shipping/profile", "shipping/destinations", "shipping/upgrades",
+  "shipping/destinations/create", "shipping/destinations/update", "shipping/destinations/delete",
+  "shipping/upgrades/create", "shipping/upgrades/update", "shipping/upgrades/delete",
+  "policies/return/list", "policies/return/create", "policies/return/update", "policies/return/delete",
+  "processing/list", "processing/create", "processing/update", "processing/delete",
+  "holidays/list", "holidays/update",
 ]);
 
 const PER_SECOND_LIMITS: Record<string, number> = {

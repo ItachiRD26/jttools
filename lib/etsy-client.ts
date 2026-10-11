@@ -346,6 +346,105 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
     url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/sections/${shop_section_id}`,
   }),
 
+  // ── Store settings (owner tools in ZCOM + the Lister) ─────────────
+  // Return policies live under /policies/return — the older "policies/*"
+  // routes above point at /policies, which Etsy doesn't have.
+  "policies/return/list": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/return`,
+  }),
+
+  "policies/return/create": ({ shop_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/return`,
+    body,
+  }),
+
+  "policies/return/update": ({ shop_id, return_policy_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/return/${return_policy_id}`,
+    body,
+  }),
+
+  "policies/return/delete": ({ shop_id, return_policy_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/policies/return/${return_policy_id}`,
+  }),
+
+  // Processing profiles = Etsy "readiness state definitions".
+  "processing/list": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/readiness-state-definitions`,
+  }),
+
+  "processing/create": ({ shop_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/readiness-state-definitions`,
+    body,
+  }),
+
+  "processing/update": ({ shop_id, readiness_state_definition_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/readiness-state-definitions/${readiness_state_definition_id}`,
+    body,
+  }),
+
+  "processing/delete": ({ shop_id, readiness_state_definition_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/readiness-state-definitions/${readiness_state_definition_id}`,
+  }),
+
+  // Per-holiday "will you process orders" switches (US/CA shops only).
+  "holidays/list": ({ shop_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/holiday-preferences`,
+  }),
+
+  "holidays/update": ({ shop_id, holiday_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/holiday-preferences/${holiday_id}`,
+    body,
+  }),
+
+  "shipping/destinations/create": ({ shop_id, profile_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}/destinations`,
+    body,
+  }),
+
+  "shipping/destinations/update": ({ shop_id, profile_id, destination_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}/destinations/${destination_id}`,
+    body,
+  }),
+
+  "shipping/destinations/delete": ({ shop_id, profile_id, destination_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}/destinations/${destination_id}`,
+  }),
+
+  "shipping/upgrades/create": ({ shop_id, profile_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}/upgrades`,
+    body,
+  }),
+
+  "shipping/upgrades/update": ({ shop_id, profile_id, upgrade_id }, body) => ({
+    method: "PUT",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}/upgrades/${upgrade_id}`,
+    body,
+  }),
+
+  "shipping/upgrades/delete": ({ shop_id, profile_id, upgrade_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/shipping-profiles/${profile_id}/upgrades/${upgrade_id}`,
+  }),
+
+  "shipping/carriers": ({ origin_country_iso }) => ({
+    method: "GET",
+    url: buildUrl(`${ETSY_BASE}/application/shipping-carriers`, { origin_country_iso }),
+  }),
+
   // ── Images & Media (expanded) ─────────────
   "images/get": ({ listing_id, listing_image_id }) => ({
     method: "GET",
