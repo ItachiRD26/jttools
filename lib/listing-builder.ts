@@ -1578,3 +1578,86 @@ export async function createListing(
 
   return response;
 }
+// ─── Listing videos (owner portal + Lister) ──────────────────────────────────
+// Etsy's uploadListingVideo is multipart/form-data with the raw file — which the
+// generic pass-through route can't send (it JSON-encodes bodies). The video comes
+// from a public/presigned https URL (ZCOM: R2) or a jt-upload:// reference (the
+// Lister: presign → PUT → confirm, so the bytes never pass through a request body).
+// Etsy: 5–15 s, ≤100 MB, MP4/MOV, up to 2 per listing (is_multi_video), sound removed.
+
+export async function uploadListingVideo(
+  userId: string, shopId: number, listingId: number,
+  video: { url: string; name?: string },
+  opts: { multi?: boolean } = {},
+): Promise<{ ok: true; video_id: number } | { ok: false; error: string }> {
+  const accessToken = await getValidAccessToken(userId, String(shopId));
+  let buffer: Buffer;
+  let contentType: string;
+  let filename = (video.name || "video.mp4").replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "video.mp4";
+  try {
+    if (video.url.startsWith("jt-upload://")) {
+      const resolved = await resolveUploadUrl(video.url, getDb() as Firestore);
+      if (!resolved) return { ok: false, error: `Upload not found or expired: ${video.url}` };
+      buffer = resolved.buffer;
+      contentType = resolved.contentType || "video/mp4";
+      if (!video.name && resolved.filename) filename = resolved.filename;
+    } else {
+      const r = await fetch(video.url);
+      if (!r.ok) return { ok: false, error: `Couldn't download the video: HTTP ${r.status}` };
+      buffer = Buffer.from(await r.arrayBuffer());
+      contentType = r.headers.get("content-type") || "video/mp4";
+    }
+  } catch (err) {
+    return { ok: false, error: `Couldn't read the video: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (buffer.byteLength > 100 * 1024 * 1024) return { ok: false, error: "Video is over Etsy's 100 MB limit." };
+
+  let lastError = "unknown error";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const fd = new FormData();
+    fd.append("video", new Blob([new Uint8Array(buffer)], { type: contentType }), filename);
+    fd.append("name", filename);
+    if (opts.multi) fd.append("is_multi_video", "true");
+    const res = await etsyRequest("POST", `/application/shops/${shopId}/listings/${listingId}/videos`, accessToken, fd);
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return { ok: true, video_id: Number((data as Record<string, unknown>).video_id) };
+    }
+    const bodyText = await res.text().catch(() => "");
+    lastError = `Etsy ${res.status}: ${(bodyText || res.statusText).slice(0, 400)}`;
+    if (res.status !== 429 && res.status < 500) break;
+    if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
+  }
+  return { ok: false, error: lastError };
+}
+
+export async function deleteListingVideo(
+  userId: string, shopId: number, listingId: number, videoId: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const accessToken = await getValidAccessToken(userId, String(shopId));
+  const res = await etsyRequest("DELETE", `/application/shops/${shopId}/listings/${listingId}/videos/${videoId}`, accessToken);
+  if (res.ok || res.status === 204 || res.status === 404) return { ok: true };
+  const body = await res.text().catch(() => "");
+  return { ok: false, error: `Etsy ${res.status}: ${(body || res.statusText).slice(0, 300)}` };
+}
+
+export async function listListingVideos(
+  userId: string, shopId: number, listingId: number,
+): Promise<{ ok: true; videos: Array<{ video_id: number; video_url: string; thumbnail_url: string; video_state: string }> } | { ok: false; error: string }> {
+  const accessToken = await getValidAccessToken(userId, String(shopId));
+  const res = await etsyRequest("GET", `/application/listings/${listingId}/videos`, accessToken);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    return { ok: false, error: `Etsy ${res.status}: ${(body || res.statusText).slice(0, 300)}` };
+  }
+  const data = await res.json();
+  return {
+    ok: true,
+    videos: (data.results ?? []).map((v: Record<string, unknown>) => ({
+      video_id: Number(v.video_id),
+      video_url: String(v.video_url ?? ""),
+      thumbnail_url: String(v.thumbnail_url ?? ""),
+      video_state: String(v.video_state ?? ""),
+    })),
+  };
+}
