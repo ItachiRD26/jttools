@@ -24,6 +24,7 @@ const OAUTH_REQUIRED = new Set([
   // a valid shop_id. Connected shops already have listings_r in the
   // OAuth grant; no re-auth needed.
   "listings/inventory",
+  "listings/personalization", "listings/personalization/update", "listings/personalization/delete",
   "shops/orders", "shops/transactions", "shops/update",
   "store/receipt", "store/receipt/update",
   "store/section/create", "store/section/update", "store/section/delete",

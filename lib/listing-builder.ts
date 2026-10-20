@@ -86,11 +86,123 @@ export interface VariationsConfig {
   };
 }
 
+/**
+ * One personalization question. Etsy replaced the single free-text box with
+ * up to five typed questions in 2026 (text, dropdown, file upload); the old
+ * listing fields are gone and writes go to the dedicated personalization
+ * endpoint. Limits below are Etsy's — validatePayload enforces them so the
+ * caller gets a 400 with a field path instead of an opaque upstream 4xx.
+ */
+export interface PersonalizationQuestion {
+  question_type:          "text_input" | "dropdown" | "unlabeled_upload" | "labeled_upload";
+  /** Shown as the field label to the buyer. 1–45 chars. */
+  question_text:          string;
+  /** Helper text under the field. ≤120 chars. */
+  instructions?:          string;
+  required?:              boolean;
+  /** text_input only. 1–1024. */
+  max_allowed_characters?: number;
+  /** uploads only. 1–10 (labeled_upload needs ≥2). One upload question per listing. */
+  max_allowed_files?:     number;
+  /** dropdown: 1–30 options, labels 1–20 chars. labeled_upload: ≥2 labels. */
+  options?:               Array<{ label: string }>;
+  /** Optional text_input only: 0.20–500.00 added to the price when answered. 0/null removes it. */
+  add_on_price?:          number | null;
+}
+
 export interface PersonalizationConfig {
   enabled:       boolean;
+  /** Multi-question form (preferred). When present and non-empty it wins over the legacy fields. */
+  questions?:    PersonalizationQuestion[];
+  /** Legacy single-text-box form — still accepted; becomes one text_input question. */
   is_required?:  boolean;
   instructions?: string;
   max_chars?:    number;
+}
+
+/** Etsy's limits for personalization questions. */
+export const PERSONALIZATION_LIMITS = {
+  questions: 5, questionText: 45, instructions: 120,
+  textChars: 1024, files: 10, options: 30, optionLabel: 20,
+  addOnMin: 0.2, addOnMax: 500,
+} as const;
+
+/** Normalise a PersonalizationConfig (legacy or multi-question) to Etsy's question list. */
+export function personalizationQuestions(p: PersonalizationConfig): PersonalizationQuestion[] {
+  if (p.questions && p.questions.length > 0) return p.questions;
+  return [{
+    question_type: "text_input",
+    question_text: "Personalization",
+    ...(p.instructions ? { instructions: p.instructions.slice(0, PERSONALIZATION_LIMITS.instructions) } : {}),
+    required: p.is_required ?? false,
+    max_allowed_characters: Math.min(Math.max(1, p.max_chars ?? 256), PERSONALIZATION_LIMITS.textChars),
+  }];
+}
+
+export function validatePersonalization(p: PersonalizationConfig): ValidationError[] {
+  const errors: ValidationError[] = [];
+  if (!p.enabled) return errors;
+  const qs = personalizationQuestions(p);
+  const L = PERSONALIZATION_LIMITS;
+  if (qs.length > L.questions) {
+    errors.push({ field: "personalization.questions", reason: `Maximum ${L.questions} questions allowed` });
+  }
+  const uploads = qs.filter(q => q.question_type === "unlabeled_upload" || q.question_type === "labeled_upload");
+  if (uploads.length > 1) {
+    errors.push({ field: "personalization.questions", reason: "Only one file-upload question per listing" });
+  }
+  qs.forEach((q, i) => {
+    const f = `personalization.questions[${i}]`;
+    const types = ["text_input", "dropdown", "unlabeled_upload", "labeled_upload"];
+    if (!types.includes(q.question_type)) {
+      errors.push({ field: `${f}.question_type`, reason: `Must be one of ${types.join(", ")}` });
+      return;
+    }
+    const text = (q.question_text ?? "").trim();
+    if (text.length < 1 || text.length > L.questionText) {
+      errors.push({ field: `${f}.question_text`, reason: `Required, 1–${L.questionText} characters` });
+    }
+    if (q.instructions && q.instructions.length > L.instructions) {
+      errors.push({ field: `${f}.instructions`, reason: `Maximum ${L.instructions} characters` });
+    }
+    if (q.question_type === "text_input") {
+      const n = q.max_allowed_characters;
+      if (n !== undefined && (!Number.isInteger(n) || n < 1 || n > L.textChars)) {
+        errors.push({ field: `${f}.max_allowed_characters`, reason: `Must be an integer 1–${L.textChars}` });
+      }
+      if (q.add_on_price != null && q.add_on_price !== 0) {
+        if (q.required) errors.push({ field: `${f}.add_on_price`, reason: "Add-on price is only allowed on optional (required: false) text questions" });
+        if (q.add_on_price < L.addOnMin || q.add_on_price > L.addOnMax) {
+          errors.push({ field: `${f}.add_on_price`, reason: `Must be ${L.addOnMin}–${L.addOnMax}` });
+        }
+      }
+    } else if (q.add_on_price != null && q.add_on_price !== 0) {
+      errors.push({ field: `${f}.add_on_price`, reason: "Add-on price is only allowed on text_input questions" });
+    }
+    if (q.question_type === "dropdown") {
+      const opts = q.options ?? [];
+      if (opts.length < 1 || opts.length > L.options) {
+        errors.push({ field: `${f}.options`, reason: `Dropdown needs 1–${L.options} options` });
+      }
+      opts.forEach((o, j) => {
+        const label = (o?.label ?? "").trim();
+        if (label.length < 1 || label.length > L.optionLabel) {
+          errors.push({ field: `${f}.options[${j}].label`, reason: `1–${L.optionLabel} characters` });
+        }
+      });
+    }
+    if (q.question_type === "unlabeled_upload" || q.question_type === "labeled_upload") {
+      const n = q.max_allowed_files;
+      const min = q.question_type === "labeled_upload" ? 2 : 1;
+      if (n !== undefined && (!Number.isInteger(n) || n < min || n > L.files)) {
+        errors.push({ field: `${f}.max_allowed_files`, reason: `Must be an integer ${min}–${L.files}` });
+      }
+      if (q.question_type === "labeled_upload" && (q.options ?? []).length < 2) {
+        errors.push({ field: `${f}.options`, reason: "labeled_upload needs at least 2 labels" });
+      }
+    }
+  });
+  return errors;
 }
 
 export interface CreateListingBody {
@@ -165,6 +277,7 @@ export function validatePayload(body: CreateListingBody): ValidationError[] {
   if (body.variations?.properties && body.variations.properties.length > 3) {
     errors.push({ field: "variations.properties", reason: "Maximum 3 variation properties allowed" });
   }
+  if (body.personalization) errors.push(...validatePersonalization(body.personalization));
 
   // Physical listing needs shipping + return policy
   if (!body.listing?.listing_type || body.listing.listing_type === "physical") {
@@ -910,23 +1023,64 @@ async function setCategoryAttributes(
 
 // ─── Set personalization ──────────────────────────────────────────────────────
 
+// Etsy's dedicated personalization endpoint (2026). The legacy
+// is_personalizable / personalization_* listing fields were retired on
+// 2026-04-09; writes now POST a question list here. The query flag tells
+// Etsy the caller understands multiple + typed questions (without it the
+// request is rejected once a listing has more than the single text box).
 async function setPersonalization(
   shopId: number, listingId: number,
   personalization: PersonalizationConfig,
-  accessToken: string
+  accessToken: string,
+  warnings: Array<Record<string, unknown>>
 ) {
-  await etsyRequest(
-    "PUT",
-    `/application/shops/${shopId}/listings/${listingId}/listing_personalization`,
-    accessToken,
-    {
-      is_personalizable:     personalization.enabled,
-      is_customizable:       personalization.enabled,
-      personalization_instructions: personalization.instructions ?? "",
-      personalization_char_count_max: personalization.max_chars ?? 256,
-      personalization_is_required: personalization.is_required ?? false,
+  const personalization_questions = personalizationQuestions(personalization).map(q => {
+    const out: Record<string, unknown> = {
+      question_type: q.question_type,
+      question_text: q.question_text.trim(),
+      required:      q.required ?? false,
+    };
+    if (q.instructions) out.instructions = q.instructions;
+    if (q.question_type === "text_input") {
+      out.max_allowed_characters = q.max_allowed_characters ?? 256;
+      if (q.add_on_price != null) out.add_on_price = q.add_on_price;
     }
-  );
+    if (q.question_type === "dropdown" || q.question_type === "labeled_upload") {
+      out.options = (q.options ?? []).map(o => ({ label: o.label.trim() }));
+    }
+    if (q.question_type === "unlabeled_upload" || q.question_type === "labeled_upload") {
+      out.max_allowed_files = q.max_allowed_files ?? (q.question_type === "labeled_upload" ? (q.options?.length ?? 2) : 1);
+    }
+    return out;
+  });
+  try {
+    const res = await etsyRequest(
+      "POST",
+      `/application/shops/${shopId}/listings/${listingId}/personalization?supports_multiple_personalization_questions=true`,
+      accessToken,
+      { personalization_questions }
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      let body: unknown; try { body = JSON.parse(text); } catch { body = text; }
+      console.error(`[ListingBuilder] POST personalization failed (${res.status}):`, JSON.stringify(body));
+      warnings.push({
+        code:         "PERSONALIZATION_SET_FAILED",
+        fields:       "personalization",
+        reason:       `Personalization update failed (Etsy ${res.status})`,
+        etsy_status:  res.status,
+        etsy_error:   body,
+        payload_sent: { personalization_questions },
+      });
+    }
+  } catch (err) {
+    console.error(`[ListingBuilder] POST personalization threw:`, err);
+    warnings.push({
+      code:   "PERSONALIZATION_SET_FAILED",
+      fields: "personalization",
+      reason: `Personalization update threw: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
 }
 
 // Strip undefined/null values from warning objects before pushing to Firestore.
@@ -1477,7 +1631,7 @@ async function publishToShop(
 
   // 6. Set personalization
   if (body.personalization?.enabled) {
-    await setPersonalization(shopId, listingId, body.personalization, accessToken);
+    await setPersonalization(shopId, listingId, body.personalization, accessToken, warnings as Array<Record<string, unknown>>);
   }
 
   // 7. Activate if state="active"

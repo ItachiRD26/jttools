@@ -1020,8 +1020,16 @@ function ListingCreate() {
     { "url": "https://example.com/white-tee.jpg", "rank": 2 }
   ],
   "personalization": {
-    "enabled": true, "is_required": false,
-    "instructions": "Enter name (max 15 chars)", "max_chars": 15
+    "enabled": true,
+    "questions": [
+      { "question_type": "text_input", "question_text": "Name to engrave",
+        "instructions": "Letters, spaces, & ' - only", "required": false,
+        "max_allowed_characters": 12, "add_on_price": 8.00 },
+      { "question_type": "dropdown", "question_text": "Font", "required": true,
+        "options": [{ "label": "Font 1" }, { "label": "Font 2" }, { "label": "Font 3" }] },
+      { "question_type": "unlabeled_upload", "question_text": "Your pet's photo",
+        "required": true, "max_allowed_files": 3 }
+    ]
   },
   "category_attributes": {
     "200":          { "value_ids": [1],    "values": ["Black"] },

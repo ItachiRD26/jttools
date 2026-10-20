@@ -113,6 +113,25 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
     url: `${ETSY_BASE}/application/listings/${listing_id}/images`,
   }),
 
+  // Personalization questions (Etsy's 2026 multi-question endpoint). Body for
+  // update is Etsy's own shape: { personalization_questions: [...] }. The
+  // query flag is mandatory — it declares the caller handles multiple + typed
+  // questions. listings/create accepts the same questions inline under
+  // `personalization.questions`; these three are for existing listings.
+  "listings/personalization": ({ listing_id }) => ({
+    method: "GET",
+    url: `${ETSY_BASE}/application/listings/${listing_id}/personalization`,
+  }),
+  "listings/personalization/update": ({ shop_id, listing_id }, body) => ({
+    method: "POST",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/personalization?supports_multiple_personalization_questions=true`,
+    body,
+  }),
+  "listings/personalization/delete": ({ shop_id, listing_id }) => ({
+    method: "DELETE",
+    url: `${ETSY_BASE}/application/shops/${requireShopId(shop_id)}/listings/${listing_id}/personalization`,
+  }),
+
   "listings/inventory": ({ listing_id }) => ({
     method: "GET",
     url: `${ETSY_BASE}/application/listings/${listing_id}/inventory`,
