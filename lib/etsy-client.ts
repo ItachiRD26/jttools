@@ -33,9 +33,17 @@ const ROUTE_MAP: Record<string, RouteHandler> = {
     }),
   }),
 
-  "listings/get": ({ listing_id }) => ({
+  // Extra params (e.g. includes=Images,Shop) pass through to Etsy.
+  "listings/get": ({ listing_id, ...rest }) => ({
     method: "GET",
-    url: `${ETSY_BASE}/application/listings/${listing_id}`,
+    url: buildUrl(`${ETSY_BASE}/application/listings/${listing_id}`, rest),
+  }),
+
+  // A listing's buyer reviews (public). Etsy pages them with limit/offset and
+  // filters with min_created/max_created; extras pass through.
+  "listings/reviews": ({ listing_id, limit = "25", offset = "0", ...rest }) => ({
+    method: "GET",
+    url: buildUrl(`${ETSY_BASE}/application/listings/${listing_id}/reviews`, { limit, offset, ...rest }),
   }),
 
   // Path is historical — the slug stays "listings/active" but accepts ?state=draft
