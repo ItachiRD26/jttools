@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "@/lib/api-auth";
-import { getAllStoreConnections, refreshStaleShops } from "@/lib/etsy-oauth";
+import { getAllStoreConnections, refreshStaleShops, refreshShopNames } from "@/lib/etsy-oauth";
 
 export async function GET(req: NextRequest) {
   const apiKey = req.headers.get("x-api-key");
@@ -25,6 +25,8 @@ export async function GET(req: NextRequest) {
   // already fresh from the cron. Caps response to ~1-2 extra seconds in the
   // pathological case where every shop needs refreshing.
   await refreshStaleShops(uid);
+  // Keep shop names current after a rename on Etsy (checked at most once a day per shop).
+  await refreshShopNames(uid).catch(() => undefined);
 
   const connections = await getAllStoreConnections(uid);
   const now = new Date();

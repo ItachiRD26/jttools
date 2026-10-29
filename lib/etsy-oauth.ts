@@ -222,6 +222,44 @@ export async function refreshStaleShops(userId: string): Promise<void> {
   }
 }
 
+// Shop names change on Etsy (a rename), but shopName was only written when the
+// shop was connected — so /stores kept serving the old name forever (ZCOM showed
+// "HeldByGlass" for a shop renamed LucernaArts). Re-read each shop's public
+// record from Etsy at most once a day and store the current name. Best-effort:
+// any failure leaves the stored name as it was.
+const SHOP_NAME_TTL_MS = 24 * 60 * 60 * 1000;
+export async function refreshShopNames(userId: string): Promise<void> {
+  const connections = await getAllStoreConnections(userId);
+  const now = Date.now();
+  const due = connections.filter((c) => {
+    const at = (c as StoreConnection & { shopNameCheckedAt?: FirebaseFirestore.Timestamp | Date | null }).shopNameCheckedAt;
+    const t = at instanceof Date ? at.getTime() : at ? (at as FirebaseFirestore.Timestamp).toMillis() : 0;
+    return now - t > SHOP_NAME_TTL_MS;
+  });
+  if (due.length === 0) return;
+  const key = `${process.env.ETSY_API_KEY}:${process.env.ETSY_SHARED_SECRET}`;
+  const db = getDb();
+  const BATCH = 6;
+  for (let i = 0; i < due.length; i += BATCH) {
+    await Promise.allSettled(due.slice(i, i + BATCH).map(async (c) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      try {
+        const res = await fetch(`https://openapi.etsy.com/v3/application/shops/${c.shopId}`, { headers: { "x-api-key": key }, signal: ctrl.signal });
+        if (!res.ok) return;
+        const shop = (await res.json()) as { shop_name?: string };
+        const name = shop.shop_name?.trim();
+        const ref = db.collection("etsyConnections").doc(userId).collection("shops").doc(String(c.shopId));
+        await ref.set({ ...(name && name !== c.shopName ? { shopName: name } : {}), shopNameCheckedAt: FieldValue.serverTimestamp() }, { merge: true });
+      } catch {
+        // network / timeout — try again on a later call
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
+  }
+}
+
 export async function disconnectStore(userId: string, shopId: string) {
   const db = getDb();
   await db
