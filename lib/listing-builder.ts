@@ -917,9 +917,13 @@ export async function uploadImagesToExistingListing(
   db?: Firestore,
 ): Promise<Array<{ rank: number; ok: boolean; listing_image_id?: number; error?: string }>> {
   const accessToken = await getValidAccessToken(userId, String(shopId));
+  // jt-upload:// references (files uploaded via presign → PUT → confirm, e.g. the
+  // Etsy Lister replacing photos on a live listing) resolve from the upload cache;
+  // without a db they were fetched as web URLs and failed.
+  const store = db ?? (getDb() as Firestore);
   const out: Array<{ rank: number; ok: boolean; listing_image_id?: number; error?: string }> = [];
   for (const img of [...images].sort((a, b) => a.rank - b.rank)) {
-    const r = await uploadImageToListing(shopId, listingId, img.url, img.rank, accessToken, db);
+    const r = await uploadImageToListing(shopId, listingId, img.url, img.rank, accessToken, store);
     out.push(r.ok
       ? { rank: img.rank, ok: true, listing_image_id: r.image.listing_image_id }
       : { rank: img.rank, ok: false, error: r.error });
