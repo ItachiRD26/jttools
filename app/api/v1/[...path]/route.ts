@@ -141,6 +141,24 @@ async function handler(
     }
   }
 
+  // listings/get: since 2026-11-10 Etsy hides a shop's DRAFT listings from
+  // key-only reads (every draft 404'd, live ones still read). When the caller
+  // passes shop_id and that shop is connected, read with its token so the shop's
+  // own drafts / inactive listings are visible. Not connected or expired → the
+  // plain public read, exactly as before.
+  if (!accessToken && endpoint === "listings/get") {
+    const shopId = req.nextUrl.searchParams.get("shop_id");
+    if (shopId) {
+      try {
+        const keySnap = await getDb().collection("apiKeys").doc(apiKey!).get();
+        const userId = keySnap.data()?.userId;
+        if (userId) accessToken = await getValidAccessToken(userId, shopId);
+      } catch {
+        /* public read */
+      }
+    }
+  }
+
   // ── 3. Params + body ───────────────────────────────────────────────────────
   const queryParams = Object.fromEntries(req.nextUrl.searchParams.entries());
   let body: unknown;
